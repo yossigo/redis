@@ -9,7 +9,7 @@
  * objects are never too long. */
 void listTypeTryConversion(robj *subject, robj *value) {
     if (subject->encoding != REDIS_ENCODING_ZIPLIST) return;
-    if (value->encoding == REDIS_ENCODING_RAW &&
+    if (sdsEncodedObject(value) &&
         sdslen(value->ptr) > server.list_max_ziplist_value)
             listTypeConvert(subject,REDIS_ENCODING_LINKEDLIST);
 }
@@ -198,7 +198,7 @@ void listTypeInsert(listTypeEntry *entry, robj *value, int where) {
 int listTypeEqual(listTypeEntry *entry, robj *o) {
     listTypeIterator *li = entry->li;
     if (li->encoding == REDIS_ENCODING_ZIPLIST) {
-        redisAssertWithInfo(NULL,o,o->encoding == REDIS_ENCODING_RAW);
+        redisAssertWithInfo(NULL,o,sdsEncodedObject(o));
         return ziplistCompare(entry->zi,o->ptr,sdslen(o->ptr));
     } else if (li->encoding == REDIS_ENCODING_LINKEDLIST) {
         return equalStringObjects(o,listNodeValue(entry->ln));
@@ -322,7 +322,7 @@ void pushxGenericCommand(redisClient *c, robj *refval, robj *val, int where) {
     if (refval != NULL) {
         /* Note: we expect refval to be string-encoded because it is *not* the
          * last argument of the multi-bulk LINSERT. */
-        redisAssertWithInfo(c,refval,refval->encoding == REDIS_ENCODING_RAW);
+        redisAssertWithInfo(c,refval,sdsEncodedObject(refval));
 
         /* We're not sure if this value can be inserted yet, but we cannot
          * convert the list inside the iterator. We don't want to loop over
