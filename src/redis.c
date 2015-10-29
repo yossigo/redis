@@ -2104,29 +2104,34 @@ void call(redisClient *c, int flags) {
     }
 
     /* Propagate the command into the AOF and replication link */
-    if (flags & REDIS_CALL_PROPAGATE) {
-        int flags = REDIS_PROPAGATE_NONE;
+    if (flags & REDIS_CALL_PROPAGATE &&
+        (c->flags & REDIS_PREVENT_PROP) != REDIS_PREVENT_PROP)
+    {
+        int propagate_flags = PROPAGATE_NONE;
 
         /* Check if the command operated changes in the data set. If so
          * set for replication / AOF propagation. */
-        if (dirty)
-            flags |= (PROPAGATE_REPL | PROPAGATE_AOF);
+        if (dirty) propagate_flags |= (PROPAGATE_AOF|PROPAGATE_REPL);
 
         /* If the command forced AOF / replication of the command, set
          * the flags regardless of the command effects on the data set. */
         if (c->flags & REDIS_FORCE_REPL) flags |= PROPAGATE_REPL;
         if (c->flags & REDIS_FORCE_AOF) flags |= PROPAGATE_AOF;
 
-        /* However calls to preventCommandPropagation() or its selective
-         * variants preventCommandAOF() and preventCommandReplicaiton()
-         * will clear the flags to avoid propagation. */
-        if (c->flags & REDIS_PREVENT_REPL_PROP) flags &= ~PROPAGATE_REPL;
-        if (c->flags & REDIS_PREVENT_AOF_PROP) flags &= ~PROPAGATE_AOF;
+        /* However prevent AOF / replication propagation if the command
+         * implementatino called preventCommandPropagation() or similar,
+         * or if we don't have the call() flags to do so. */
+        if (c->flags & REDIS_PREVENT_REPL_PROP ||
+            !(flags & REDIS_CALL_PROPAGATE_REPL))
+                propagate_flags &= ~PROPAGATE_REPL;
+        if (c->flags & REDIS_PREVENT_AOF_PROP ||
+            !(flags & REDIS_CALL_PROPAGATE_AOF))
+                propagate_flags &= ~PROPAGATE_AOF;
 
         /* Call propagate() only if at least one of AOF / replication
          * propagation is needed. */
-        if (flags != PROPAGATE_NONE)
-            propagate(c->cmd,c->db->id,c->argv,c->argc,flags);
+        if (propagate_flags != PROPAGATE_NONE)
+            propagate(c->cmd,c->db->id,c->argv,c->argc,propagate_flags);
     }
 
     /* Restore the old FORCE_AOF/REPL flags, since call can be executed
@@ -2140,9 +2145,16 @@ void call(redisClient *c, int flags) {
         int j;
         redisOp *rop;
 
-        for (j = 0; j < server.also_propagate.numops; j++) {
-            rop = &server.also_propagate.ops[j];
-            propagate(rop->cmd, rop->dbid, rop->argv, rop->argc, rop->target);
+        if (flags & REDIS_CALL_PROPAGATE) {
+            for (j = 0; j < server.also_propagate.numops; j++) {
+                rop = &server.also_propagate.ops[j];
+                int target = rop->target;
+                /* Whatever the command wish is, we honor the call() flags. */
+                if (!(flags&REDIS_CALL_PROPAGATE_AOF)) target &= ~PROPAGATE_AOF;
+                if (!(flags&REDIS_CALL_PROPAGATE_REPL)) target &= ~PROPAGATE_REPL;
+                if (target)
+                    propagate(rop->cmd,rop->dbid,rop->argv,rop->argc,target);
+            }
         }
         redisOpArrayFree(&server.also_propagate);
     }

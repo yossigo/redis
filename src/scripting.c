@@ -388,11 +388,11 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
     /* Run the command */
     int call_flags = REDIS_CALL_SLOWLOG | REDIS_CALL_STATS;
     if (server.lua_replicate_commands) {
-        call_flags |= REDIS_CALL_PROPAGATE;
-        /* Don't propagate AOf / replication stream if a redis.set_repl()
-         * call changed the default replication policy. */
-        if (!(server.lua_repl & PROPAGATE_AOF)) preventCommandAOF(c);
-        if (!(server.lua_repl & PROPAGATE_REPL)) preventCommandReplication(c);
+        /* Set flags according to redis.set_repl() settings. */
+        if (server.lua_repl & PROPAGATE_AOF)
+            call_flags |= REDIS_CALL_PROPAGATE_AOF;
+        if (server.lua_repl & PROPAGATE_REPL)
+            call_flags |= REDIS_CALL_PROPAGATE_REPL;
     }
     call(c,call_flags);
 

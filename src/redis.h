@@ -375,9 +375,11 @@ typedef long long mstime_t; /* millisecond time type. */
 
 /* Command call flags, see call() function */
 #define REDIS_CALL_NONE 0
-#define REDIS_CALL_SLOWLOG 1
-#define REDIS_CALL_STATS 2
-#define REDIS_CALL_PROPAGATE 4
+#define REDIS_CALL_SLOWLOG (1<<0)
+#define REDIS_CALL_STATS (1<<1)
+#define REDIS_CALL_PROPAGATE_AOF (1<<2)
+#define REDIS_CALL_PROPAGATE_REPL (1<<3)
+#define REDIS_CALL_PROPAGATE (REDIS_CALL_PROPAGATE_AOF|REDIS_CALL_PROPAGATE_REPL)
 #define REDIS_CALL_FULL (REDIS_CALL_SLOWLOG | REDIS_CALL_STATS | REDIS_CALL_PROPAGATE)
 
 /* Command propagation flags, see propagate() function */
