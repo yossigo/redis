@@ -249,6 +249,9 @@ typedef long long mstime_t; /* millisecond time type. */
 #define REDIS_PRE_PSYNC (1<<16)   /* Instance don't understand PSYNC. */
 #define REDIS_READONLY (1<<17)    /* Cluster client is in read-only state. */
 #define REDIS_PUBSUB (1<<18)      /* Client is in Pub/Sub mode. */
+#define REDIS_PREVENT_AOF_PROP (1<<19)  /* Don't propagate to AOF. */
+#define REDIS_PREVENT_REPL_PROP (1<<20)  /* Don't propagate to slaves. */
+#define REDIS_PREVENT_PROP (REDIS_PREVENT_AOF_PROP|REDIS_PREVENT_REPL_PROP)
 
 /* Client block type (btype field in client structure)
  * if REDIS_BLOCKED flag is set. */
@@ -1252,6 +1255,9 @@ void call(redisClient *c, int flags);
 void propagate(struct redisCommand *cmd, int dbid, robj **argv, int argc, int flags);
 void alsoPropagate(struct redisCommand *cmd, int dbid, robj **argv, int argc, int target);
 void forceCommandPropagation(redisClient *c, int flags);
+void preventCommandPropagation(redisClient *c);
+void preventCommandAOF(redisClient *c);
+void preventCommandReplication(redisClient *c);
 int prepareForShutdown();
 #ifdef __GNUC__
 void redisLog(int level, const char *fmt, ...)
