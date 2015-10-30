@@ -1042,7 +1042,7 @@ void evalGenericCommand(redisClient *c, int evalsha) {
      * is called after a random command was used. */
     server.lua_random_dirty = 0;
     server.lua_write_dirty = 0;
-    server.lua_replicate_commands = 0;
+    server.lua_replicate_commands = server.lua_always_replicate_commands;
     server.lua_multi_emitted = 0;
     server.lua_repl = PROPAGATE_AOF|PROPAGATE_REPL;
 
