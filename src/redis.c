@@ -2027,11 +2027,31 @@ void propagate(struct redisCommand *cmd, int dbid, robj **argv, int argc,
 }
 
 /* Used inside commands to schedule the propagation of additional commands
- * after the current command is propagated to AOF / Replication. */
+ * after the current command is propagated to AOF / Replication.
+ *
+ * 'cmd' must be a pointer to the Redis command to replicate, dbid is the
+ * database ID the command should be propagated into.
+ * Arguments of the command to propagte are passed as an array of redis
+ * objects pointers of len 'argc', using the 'argv' vector.
+ *
+ * The function does not take a reference to the passed 'argv' vector,
+ * so it is up to the caller to release the passed argv (but it is usually
+ * stack allocated).  The function autoamtically increments ref count of
+ * passed objects, so the caller does not need to. */
 void alsoPropagate(struct redisCommand *cmd, int dbid, robj **argv, int argc,
                    int target)
 {
-    redisOpArrayAppend(&server.also_propagate,cmd,dbid,argv,argc,target);
+    robj **argvcopy;
+    int j;
+
+    if (server.loading) return; /* No propagation during loading. */
+
+    argvcopy = zmalloc(sizeof(robj*)*argc);
+    for (j = 0; j < argc; j++) {
+        argvcopy[j] = argv[j];
+        incrRefCount(argv[j]);
+    }
+    redisOpArrayAppend(&server.also_propagate,cmd,dbid,argvcopy,argc,target);
 }
 
 /* It is possible to call the function forceCommandPropagation() inside a
@@ -2042,14 +2062,21 @@ void forceCommandPropagation(redisClient *c, int flags) {
     if (flags & REDIS_PROPAGATE_AOF) c->flags |= REDIS_FORCE_AOF;
 }
 
+/* Avoid that the executed command is propagated at all. This way we
+ * are free to just propagate what we want using the alsoPropagate()
+ * API. */
+void preventCommandPropagation(redisClient *c) {
+    c->flags |= REDIS_PREVENT_PROP;
+}
+
 /* AOF specific version of preventCommandPropagation(). */
-void preventCommandAOF(client *c) {
-    c->flags |= CLIENT_PREVENT_AOF_PROP;
+void preventCommandAOF(redisClient *c) {
+    c->flags |= REDIS_PREVENT_AOF_PROP;
 }
 
 /* Replication specific version of preventCommandPropagation(). */
-void preventCommandReplication(client *c) {
-    c->flags |= CLIENT_PREVENT_REPL_PROP;
+void preventCommandReplication(redisClient *c) {
+    c->flags |= REDIS_PREVENT_REPL_PROP;
 }
 
 /* Call() is the core of Redis execution of a command */
@@ -2067,7 +2094,7 @@ void call(redisClient *c, int flags) {
     }
 
     /* Call the command. */
-    c->flags &= ~(REDIS_FORCE_AOF|REDIS_FORCE_REPL);
+    c->flags &= ~(REDIS_FORCE_AOF|REDIS_FORCE_REPL|REDIS_PREVENT_PROP);
     redisOpArrayInit(&server.also_propagate);
     dirty = server.dirty;
     start = ustime();
@@ -2108,37 +2135,37 @@ void call(redisClient *c, int flags) {
     if (flags & REDIS_CALL_PROPAGATE &&
         (c->flags & REDIS_PREVENT_PROP) != REDIS_PREVENT_PROP)
     {
-        int propagate_flags = PROPAGATE_NONE;
+        int propagate_flags = REDIS_PROPAGATE_NONE;
 
         /* Check if the command operated changes in the data set. If so
          * set for replication / AOF propagation. */
-        if (dirty) propagate_flags |= (PROPAGATE_AOF|PROPAGATE_REPL);
+        if (dirty) propagate_flags |= (REDIS_PROPAGATE_AOF|REDIS_PROPAGATE_REPL);
 
         /* If the command forced AOF / replication of the command, set
          * the flags regardless of the command effects on the data set. */
-        if (c->flags & REDIS_FORCE_REPL) propagate_flags |= PROPAGATE_REPL;
-        if (c->flags & REDIS_FORCE_AOF) propagate_flags |= PROPAGATE_AOF;
+        if (c->flags & REDIS_FORCE_REPL) propagate_flags |= REDIS_PROPAGATE_REPL;
+        if (c->flags & REDIS_FORCE_AOF) propagate_flags |= REDIS_PROPAGATE_AOF;
 
         /* However prevent AOF / replication propagation if the command
          * implementatino called preventCommandPropagation() or similar,
          * or if we don't have the call() flags to do so. */
         if (c->flags & REDIS_PREVENT_REPL_PROP ||
             !(flags & REDIS_CALL_PROPAGATE_REPL))
-                propagate_flags &= ~PROPAGATE_REPL;
+                propagate_flags &= ~REDIS_PROPAGATE_REPL;
         if (c->flags & REDIS_PREVENT_AOF_PROP ||
             !(flags & REDIS_CALL_PROPAGATE_AOF))
-                propagate_flags &= ~PROPAGATE_AOF;
+                propagate_flags &= ~REDIS_PROPAGATE_AOF;
 
         /* Call propagate() only if at least one of AOF / replication
          * propagation is needed. */
-        if (propagate_flags != PROPAGATE_NONE)
+        if (propagate_flags != REDIS_PROPAGATE_NONE)
             propagate(c->cmd,c->db->id,c->argv,c->argc,propagate_flags);
     }
 
     /* Restore the old FORCE_AOF/REPL flags, since call can be executed
      * recursively. */
-    c->flags &= ~(REDIS_FORCE_AOF|REDIS_FORCE_REPL);
-    c->flags |= client_old_flags & (REDIS_FORCE_AOF|REDIS_FORCE_REPL);
+    c->flags &= ~(REDIS_FORCE_AOF|REDIS_FORCE_REPL|REDIS_PREVENT_PROP);
+    c->flags |= client_old_flags & (REDIS_FORCE_AOF|REDIS_FORCE_REPL|REDIS_PREVENT_PROP);
 
     /* Handle the alsoPropagate() API to handle commands that want to propagate
      * multiple separated commands. */
@@ -2151,8 +2178,8 @@ void call(redisClient *c, int flags) {
                 rop = &server.also_propagate.ops[j];
                 int target = rop->target;
                 /* Whatever the command wish is, we honor the call() flags. */
-                if (!(flags&REDIS_CALL_PROPAGATE_AOF)) target &= ~PROPAGATE_AOF;
-                if (!(flags&REDIS_CALL_PROPAGATE_REPL)) target &= ~PROPAGATE_REPL;
+                if (!(flags&REDIS_CALL_PROPAGATE_AOF)) target &= ~REDIS_PROPAGATE_AOF;
+                if (!(flags&REDIS_CALL_PROPAGATE_REPL)) target &= ~REDIS_PROPAGATE_REPL;
                 if (target)
                     propagate(rop->cmd,rop->dbid,rop->argv,rop->argc,target);
             }

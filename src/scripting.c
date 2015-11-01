@@ -379,7 +379,7 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
     if (server.lua_replicate_commands &&
         !server.lua_multi_emitted &&
         server.lua_write_dirty &&
-        server.lua_repl != PROPAGATE_NONE)
+        server.lua_repl != REDIS_PROPAGATE_NONE)
     {
         execCommandPropagateMulti(server.lua_caller);
         server.lua_multi_emitted = 1;
@@ -389,9 +389,9 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
     int call_flags = REDIS_CALL_SLOWLOG | REDIS_CALL_STATS;
     if (server.lua_replicate_commands) {
         /* Set flags according to redis.set_repl() settings. */
-        if (server.lua_repl & PROPAGATE_AOF)
+        if (server.lua_repl & REDIS_PROPAGATE_AOF)
             call_flags |= REDIS_CALL_PROPAGATE_AOF;
-        if (server.lua_repl & PROPAGATE_REPL)
+        if (server.lua_repl & REDIS_PROPAGATE_REPL)
             call_flags |= REDIS_CALL_PROPAGATE_REPL;
     }
     call(c,call_flags);
@@ -568,7 +568,7 @@ int luaRedisSetReplCommand(lua_State *lua) {
     }
 
     flags = lua_tonumber(lua,-1);
-    if ((flags & ~(PROPAGATE_AOF|PROPAGATE_REPL)) != 0) {
+    if ((flags & ~(REDIS_PROPAGATE_AOF|REDIS_PROPAGATE_REPL)) != 0) {
         lua_pushstring(lua, "Invalid replication flags. Use REPL_AOF, REPL_SLAVE, REPL_ALL or REPL_NONE.");
         return lua_error(lua);
     }
@@ -783,19 +783,19 @@ void scriptingInit(void) {
     lua_settable(lua,-3);
 
     lua_pushstring(lua,"REPL_NONE");
-    lua_pushnumber(lua,PROPAGATE_NONE);
+    lua_pushnumber(lua,REDIS_PROPAGATE_NONE);
     lua_settable(lua,-3);
 
     lua_pushstring(lua,"REPL_AOF");
-    lua_pushnumber(lua,PROPAGATE_AOF);
+    lua_pushnumber(lua,REDIS_PROPAGATE_AOF);
     lua_settable(lua,-3);
 
     lua_pushstring(lua,"REPL_SLAVE");
-    lua_pushnumber(lua,PROPAGATE_REPL);
+    lua_pushnumber(lua,REDIS_PROPAGATE_REPL);
     lua_settable(lua,-3);
 
     lua_pushstring(lua,"REPL_ALL");
-    lua_pushnumber(lua,PROPAGATE_AOF|PROPAGATE_REPL);
+    lua_pushnumber(lua,REDIS_PROPAGATE_AOF|REDIS_PROPAGATE_REPL);
     lua_settable(lua,-3);
 
     /* Finally set the table as 'redis' global var. */
@@ -1044,7 +1044,7 @@ void evalGenericCommand(redisClient *c, int evalsha) {
     server.lua_write_dirty = 0;
     server.lua_replicate_commands = server.lua_always_replicate_commands;
     server.lua_multi_emitted = 0;
-    server.lua_repl = PROPAGATE_AOF|PROPAGATE_REPL;
+    server.lua_repl = REDIS_PROPAGATE_AOF|REDIS_PROPAGATE_REPL;
 
     /* Get the number of arguments that are keys */
     if (getLongLongFromObjectOrReply(c,c->argv[2],&numkeys,NULL) != REDIS_OK)
@@ -1176,7 +1176,7 @@ void evalGenericCommand(redisClient *c, int evalsha) {
             robj *propargv[1];
             propargv[0] = createStringObject("EXEC",4);
             alsoPropagate(server.execCommand,c->db->id,propargv,1,
-                PROPAGATE_AOF|PROPAGATE_REPL);
+                REDIS_PROPAGATE_AOF|REDIS_PROPAGATE_REPL);
             decrRefCount(propargv[0]);
         }
     }
