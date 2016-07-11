@@ -2761,6 +2761,33 @@ double RM_LoadDouble(RedisModuleIO *io) {
     return value;
 }
 
+/* Load an encoded data type from a RedisModuleString.  This enables implementing
+ * a RESTORE like command. */
+void *RM_LoadDataTypeFromString(const RedisModuleString *str, const moduleType *mt) {
+    rio payload;
+    RedisModuleIO io;
+
+    rioInitWithBuffer(&payload, str->ptr);
+    moduleInitIOContext(io,(moduleType *)mt,&payload);
+    return mt->rdb_load(&io,0);
+}
+
+/* Save an encoded data type as a RedisModuleString.  This enables implementing a
+ * DUMP like command. */
+RedisModuleString *RM_SaveDataTypeToString(void *data, const moduleType *mt) {
+    rio payload;
+    RedisModuleIO io;
+
+    rioInitWithBuffer(&payload,sdsempty());
+    moduleInitIOContext(io,(moduleType *)mt,&payload);
+    mt->rdb_save(&io,data);
+    if (io.error) {
+        return NULL;
+    } else {
+        return createObject(OBJ_STRING,payload.io.buffer.ptr);
+    }
+}
+
 /* --------------------------------------------------------------------------
  * AOF API for modules data types
  * -------------------------------------------------------------------------- */
@@ -3052,6 +3079,8 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(EmitAOF);
     REGISTER_API(Log);
     REGISTER_API(RegisterHook);
+    REGISTER_API(SaveDataTypeToString);
+    REGISTER_API(LoadDataTypeFromString);
 }
 
 /* Global initialization at Redis startup. */
