@@ -2774,7 +2774,7 @@ void *RM_LoadDataTypeFromString(const RedisModuleString *str, const moduleType *
 
 /* Save an encoded data type as a RedisModuleString.  This enables implementing a
  * DUMP like command. */
-RedisModuleString *RM_SaveDataTypeToString(void *data, const moduleType *mt) {
+RedisModuleString *RM_SaveDataTypeToString(RedisModuleCtx *ctx, void *data, const moduleType *mt) {
     rio payload;
     RedisModuleIO io;
 
@@ -2784,7 +2784,9 @@ RedisModuleString *RM_SaveDataTypeToString(void *data, const moduleType *mt) {
     if (io.error) {
         return NULL;
     } else {
-        return createObject(OBJ_STRING,payload.io.buffer.ptr);
+        robj *str = createObject(OBJ_STRING,payload.io.buffer.ptr);
+        autoMemoryAdd(ctx,REDISMODULE_AM_STRING,str);
+        return str;
     }
 }
 
