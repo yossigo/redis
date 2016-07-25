@@ -34,7 +34,9 @@
  * https://github.com/yinqiwen/ardb/blob/d42503/src/geo/geohash_helper.cpp
  */
 
+#include "fmacros.h"
 #include "geohash_helper.h"
+#include <math.h>
 
 #define D_R (M_PI / 180.0)
 #define R_MAJOR 6378137.0
@@ -76,11 +78,6 @@ uint8_t geohashEstimateStepsByRadius(double range_meters, double lat) {
     return step;
 }
 
-int geohashBitsComparator(const GeoHashBits *a, const GeoHashBits *b) {
-    /* If step not equal, compare on step.  Else, compare on bits. */
-    return a->step != b->step ? a->step - b->step : a->bits - b->bits;
-}
-
 int geohashBoundingBox(double longitude, double latitude, double radius_meters,
                        double *bounds) {
     if (!bounds) return 0;
@@ -110,10 +107,10 @@ int geohashBoundingBox(double longitude, double latitude, double radius_meters,
 
 GeoHashRadius geohashGetAreasByRadius(double longitude, double latitude, double radius_meters) {
     GeoHashRange long_range, lat_range;
-    GeoHashRadius radius = { { 0 } };
-    GeoHashBits hash = { 0 };
-    GeoHashNeighbors neighbors = { { 0 } };
-    GeoHashArea area = { { 0 } };
+    GeoHashRadius radius = {{0}};
+    GeoHashBits hash = {0,0};
+    GeoHashNeighbors neighbors = {{0}};
+    GeoHashArea area = {{0}};
     double min_lon, max_lon, min_lat, max_lat;
     double bounds[4];
     int steps;

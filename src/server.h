@@ -129,6 +129,8 @@ typedef long long mstime_t; /* millisecond time type. */
 #define CONFIG_DEFAULT_REPL_DISABLE_TCP_NODELAY 0
 #define CONFIG_DEFAULT_MAXMEMORY 0
 #define CONFIG_DEFAULT_MAXMEMORY_SAMPLES 5
+#define CONFIG_DEFAULT_LFU_LOG_FACTOR 10
+#define CONFIG_DEFAULT_LFU_DECAY_TIME 1
 #define CONFIG_DEFAULT_AOF_FILENAME "appendonly.aof"
 #define CONFIG_DEFAULT_AOF_NO_FSYNC_ON_REWRITE 0
 #define CONFIG_DEFAULT_AOF_LOAD_TRUNCATED 1
@@ -341,13 +343,24 @@ typedef long long mstime_t; /* millisecond time type. */
 #define SET_OP_DIFF 1
 #define SET_OP_INTER 2
 
-/* Redis maxmemory strategies */
-#define MAXMEMORY_VOLATILE_LRU 0
-#define MAXMEMORY_VOLATILE_TTL 1
-#define MAXMEMORY_VOLATILE_RANDOM 2
-#define MAXMEMORY_ALLKEYS_LRU 3
-#define MAXMEMORY_ALLKEYS_RANDOM 4
-#define MAXMEMORY_NO_EVICTION 5
+/* Redis maxmemory strategies. Instead of using just incremental number
+ * for this defines, we use a set of flags so that testing for certain
+ * properties common to multiple policies is faster. */
+#define MAXMEMORY_FLAG_LRU (1<<0)
+#define MAXMEMORY_FLAG_LFU (1<<1)
+#define MAXMEMORY_FLAG_ALLKEYS (1<<2)
+#define MAXMEMORY_FLAG_NO_SHARED_INTEGERS \
+    (MAXMEMORY_FLAG_LRU|MAXMEMORY_FLAG_LFU)
+
+#define MAXMEMORY_VOLATILE_LRU ((0<<8)|MAXMEMORY_FLAG_LRU)
+#define MAXMEMORY_VOLATILE_LFU ((1<<8)|MAXMEMORY_FLAG_LFU)
+#define MAXMEMORY_VOLATILE_TTL (2<<8)
+#define MAXMEMORY_VOLATILE_RANDOM (3<<8)
+#define MAXMEMORY_ALLKEYS_LRU ((4<<8)|MAXMEMORY_FLAG_LRU|MAXMEMORY_FLAG_ALLKEYS)
+#define MAXMEMORY_ALLKEYS_LFU ((5<<8)|MAXMEMORY_FLAG_LFU|MAXMEMORY_FLAG_ALLKEYS)
+#define MAXMEMORY_ALLKEYS_RANDOM ((6<<8)|MAXMEMORY_FLAG_ALLKEYS)
+#define MAXMEMORY_NO_EVICTION (7<<8)
+
 #define CONFIG_DEFAULT_MAXMEMORY_POLICY MAXMEMORY_NO_EVICTION
 
 /* Scripting */
@@ -528,7 +541,9 @@ typedef struct RedisModuleIO {
 typedef struct redisObject {
     unsigned type:4;
     unsigned encoding:4;
-    unsigned lru:LRU_BITS; /* lru time (relative to server.lruclock) */
+    unsigned lru:LRU_BITS; /* LRU time (relative to server.lruclock) or
+                            * LFU data (least significant 8 bits frequency
+                            * and most significant 16 bits decreas time). */
     int refcount;
     void *ptr;
 } robj;
@@ -550,18 +565,7 @@ typedef struct redisObject {
     _var.ptr = _ptr; \
 } while(0)
 
-/* To improve the quality of the LRU approximation we take a set of keys
- * that are good candidate for eviction across freeMemoryIfNeeded() calls.
- *
- * Entries inside the eviciton pool are taken ordered by idle time, putting
- * greater idle times to the right (ascending order).
- *
- * Empty entries have the key pointer set to NULL. */
-#define MAXMEMORY_EVICTION_POOL_SIZE 16
-struct evictionPoolEntry {
-    unsigned long long idle;    /* Object idle time. */
-    sds key;                    /* Key name. */
-};
+struct evictionPoolEntry; /* Defined in evict.c */
 
 /* Redis database representation. There are multiple databases identified
  * by integers from 0 (the default database) up to the max configured
@@ -569,10 +573,9 @@ struct evictionPoolEntry {
 typedef struct redisDb {
     dict *dict;                 /* The keyspace for this DB */
     dict *expires;              /* Timeout of keys with a timeout set */
-    dict *blocking_keys;        /* Keys with clients waiting for data (BLPOP) */
+    dict *blocking_keys;        /* Keys with clients waiting for data (BLPOP)*/
     dict *ready_keys;           /* Blocked keys that received a PUSH */
     dict *watched_keys;         /* WATCHED keys for MULTI/EXEC CAS */
-    struct evictionPoolEntry *eviction_pool;    /* Eviction pool of keys */
     int id;                     /* Database ID */
     long long avg_ttl;          /* Average TTL, just for stats */
 } redisDb;
@@ -915,6 +918,7 @@ struct redisServer {
     time_t lastbgsave_try;          /* Unix time of last attempted bgsave */
     time_t rdb_save_time_last;      /* Time used by last RDB save run. */
     time_t rdb_save_time_start;     /* Current RDB save start time. */
+    int rdb_bgsave_scheduled;       /* BGSAVE when possible if true. */
     int rdb_child_type;             /* Type of save by active child. */
     int lastbgsave_status;          /* C_OK or C_ERR */
     int stop_writes_on_bgsave_err;  /* Don't allow writes if can't BGSAVE */
@@ -982,6 +986,8 @@ struct redisServer {
     unsigned long long maxmemory;   /* Max number of memory bytes to use */
     int maxmemory_policy;           /* Policy for key eviction */
     int maxmemory_samples;          /* Pricision of random sampling */
+    unsigned int lfu_log_factor;    /* LFU logarithmic counter factor. */
+    unsigned int lfu_decay_time;    /* LFU counter decay factor. */
     /* Blocked clients */
     unsigned int bpop_blocked_clients; /* Number of clients blocked by lists */
     list *unblocked_clients; /* list of clients to unblock before next loop */
@@ -1614,6 +1620,15 @@ void unblockClient(client *c);
 void replyToBlockedClientTimedOut(client *c);
 int getTimeoutFromObjectOrReply(client *c, robj *object, mstime_t *timeout, int unit);
 void disconnectAllBlockedClients(void);
+
+/* expire.c -- Handling of expired keys */
+void activeExpireCycle(int type);
+
+/* evict.c -- maxmemory handling and LRU eviction. */
+void evictionPoolAlloc(void);
+#define LFU_INIT_VAL 5
+unsigned long LFUGetTimeInMinutes(void);
+uint8_t LFULogIncr(uint8_t value);
 
 /* Git SHA1 */
 char *redisGitSHA1(void);

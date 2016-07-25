@@ -43,8 +43,13 @@ robj *createObject(int type, void *ptr) {
     o->ptr = ptr;
     o->refcount = 1;
 
-    /* Set the LRU to the current lruclock (minutes resolution). */
-    o->lru = LRU_CLOCK();
+    /* Set the LRU to the current lruclock (minutes resolution), or
+     * alternatively the LFU counter. */
+    if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
+        o->lru = (LFUGetTimeInMinutes()<<8) | LFU_INIT_VAL;
+    } else {
+        o->lru = LRU_CLOCK();
+    }
     return o;
 }
 
@@ -82,7 +87,11 @@ robj *createEmbeddedStringObject(const char *ptr, size_t len) {
     o->encoding = OBJ_ENCODING_EMBSTR;
     o->ptr = sh+1;
     o->refcount = 1;
-    o->lru = LRU_CLOCK();
+    if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
+        o->lru = (LFUGetTimeInMinutes()<<8) | LFU_INIT_VAL;
+    } else {
+        o->lru = LRU_CLOCK();
+    }
 
     sh->len = len;
     sh->alloc = len;
@@ -394,8 +403,7 @@ robj *tryObjectEncoding(robj *o) {
          * because every object needs to have a private LRU field for the LRU
          * algorithm to work well. */
         if ((server.maxmemory == 0 ||
-             (server.maxmemory_policy != MAXMEMORY_VOLATILE_LRU &&
-              server.maxmemory_policy != MAXMEMORY_ALLKEYS_LRU)) &&
+            !(server.maxmemory_policy & MAXMEMORY_FLAG_NO_SHARED_INTEGERS)) &&
             value >= 0 &&
             value < OBJ_SHARED_INTEGERS)
         {
@@ -619,20 +627,6 @@ int getLongDoubleFromObjectOrReply(client *c, robj *o, long double *target, cons
     return C_OK;
 }
 
-/* Helper function for getLongLongFromObject(). The function parses the string
- * as a long long value in a strict way (no spaces before/after). On success
- * C_OK is returned, otherwise C_ERR is returned. */
-int strict_strtoll(char *str, long long *vp) {
-    char *eptr;
-    long long value;
-
-    errno = 0;
-    value = strtoll(str, &eptr, 10);
-    if (isspace(str[0]) || eptr[0] != '\0' || errno == ERANGE) return C_ERR;
-    if (vp) *vp = value;
-    return C_OK;
-}
-
 int getLongLongFromObject(robj *o, long long *target) {
     long long value;
 
@@ -641,7 +635,7 @@ int getLongLongFromObject(robj *o, long long *target) {
     } else {
         serverAssertWithInfo(NULL,o,o->type == OBJ_STRING);
         if (sdsEncodedObject(o)) {
-            if (strict_strtoll(o->ptr,&value) == C_ERR) return C_ERR;
+            if (string2ll(o->ptr,sdslen(o->ptr),&value) == 0) return C_ERR;
         } else if (o->encoding == OBJ_ENCODING_INT) {
             value = (long)o->ptr;
         } else {
@@ -696,18 +690,6 @@ char *strEncoding(int encoding) {
     }
 }
 
-/* Given an object returns the min number of milliseconds the object was never
- * requested, using an approximated LRU algorithm. */
-unsigned long long estimateObjectIdleTime(robj *o) {
-    unsigned long long lruclock = LRU_CLOCK();
-    if (lruclock >= o->lru) {
-        return (lruclock - o->lru) * LRU_CLOCK_RESOLUTION;
-    } else {
-        return (lruclock + (LRU_CLOCK_MAX - o->lru)) *
-                    LRU_CLOCK_RESOLUTION;
-    }
-}
-
 /* This is a helper function for the OBJECT command. We need to lookup keys
  * without any modification of LRU or other parameters. */
 robj *objectCommandLookup(client *c, robj *key) {
@@ -740,9 +722,21 @@ void objectCommand(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr,"idletime") && c->argc == 3) {
         if ((o = objectCommandLookupOrReply(c,c->argv[2],shared.nullbulk))
                 == NULL) return;
+        if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
+            addReplyError(c,"An LFU maxmemory policy is selected, idle time not tracked. Please note that when switching between policies at runtime LRU and LFU data will take some time to adjust.");
+            return;
+        }
         addReplyLongLong(c,estimateObjectIdleTime(o)/1000);
+    } else if (!strcasecmp(c->argv[1]->ptr,"freq") && c->argc == 3) {
+        if ((o = objectCommandLookupOrReply(c,c->argv[2],shared.nullbulk))
+                == NULL) return;
+        if (server.maxmemory_policy & MAXMEMORY_FLAG_LRU) {
+            addReplyError(c,"An LRU maxmemory policy is selected, access frequency not tracked. Please note that when switching between policies at runtime LRU and LFU data will take some time to adjust.");
+            return;
+        }
+        addReplyLongLong(c,o->lru&255);
     } else {
-        addReplyError(c,"Syntax error. Try OBJECT (refcount|encoding|idletime)");
+        addReplyError(c,"Syntax error. Try OBJECT (refcount|encoding|idletime|freq)");
     }
 }
 
