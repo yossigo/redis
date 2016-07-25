@@ -130,6 +130,7 @@ client *createClient(int fd) {
     listSetMatchMethod(c->pubsub_patterns,listMatchObjects);
     if (fd != -1) listAddNodeTail(server.clients,c);
     initClientMultiState(c);
+    c->unlink_func = NULL;
     return c;
 }
 
@@ -755,6 +756,14 @@ void unlinkClient(client *c) {
         serverAssert(ln != NULL);
         listDelNode(server.unblocked_clients,ln);
         c->flags &= ~CLIENT_UNBLOCKED;
+    }
+
+    /* Unlink callback.  This is currently a rather ugly hack which should go
+     * into proper Redis Module API sometime.
+     */
+    if (c->unlink_func) {
+        c->unlink_func(c);
+        c->unlink_func = NULL;   /* Guarantee only-once */
     }
 }
 

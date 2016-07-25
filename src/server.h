@@ -679,6 +679,9 @@ typedef struct client {
     /* Response buffer */
     int bufpos;
     char buf[PROTO_REPLY_CHUNK_BYTES];
+
+    /* Unlink callback */
+    void (*unlink_func)(struct client *);
 } client;
 
 struct saveparam {
