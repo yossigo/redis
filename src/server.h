@@ -1064,6 +1064,9 @@ struct redisServer {
     int watchdog_period;  /* Software watchdog period in ms. 0 = off */
     /* System hardware info */
     size_t system_memory_size;  /* Total memory in system as reported by OS */
+
+    /* Temporary hack to call crdt cron periodically */
+    void (*cron_callback)(void);
 };
 
 typedef struct pubsubPattern {
