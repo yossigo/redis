@@ -1670,6 +1670,9 @@ void backgroundSaveDoneHandler(int exitcode, int bysignal) {
     case RDB_CHILD_TYPE_SOCKET:
         backgroundSaveDoneHandlerSocket(exitcode,bysignal);
         break;
+    case RDB_CHILD_TYPE_MODULE:
+        server.rdb_child_done_callback(exitcode,bysignal);
+        break;
     default:
         serverPanic("Unknown RDB child type.");
         break;
