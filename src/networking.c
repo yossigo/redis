@@ -165,6 +165,9 @@ int prepareClientToWrite(client *c) {
     /* CLIENT REPLY OFF / SKIP handling: don't send replies. */
     if (c->flags & (CLIENT_REPLY_OFF|CLIENT_REPLY_SKIP)) return C_ERR;
 
+    /* CLIENT_REPLY_QUEUE: queue replies until released. */
+    if (c->flags & CLIENT_REPLY_QUEUE) return C_OK;
+
     /* Masters don't receive replies, unless CLIENT_MASTER_FORCE_REPLY flag
      * is set. */
     if ((c->flags & CLIENT_MASTER) &&

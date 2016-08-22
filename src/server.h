@@ -237,6 +237,7 @@ typedef long long mstime_t; /* millisecond time type. */
 #define CLIENT_LUA_DEBUG (1<<25)  /* Run EVAL in debug mode. */
 #define CLIENT_LUA_DEBUG_SYNC (1<<26)  /* EVAL debugging without fork() */
 #define CLIENT_MODULE (1<<27) /* Non connected client used by some module. */
+#define CLIENT_REPLY_QUEUE (1<<28)  /* Queue replies and don't send to client */
 
 /* Client block type (btype field in client structure)
  * if CLIENT_BLOCKED flag is set. */
