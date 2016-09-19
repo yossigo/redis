@@ -3370,5 +3370,6 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(StringCompare);
     REGISTER_API(SaveAuxField);
     REGISTER_API(SaveDataTypeToString);
+    REGISTER_API(LoadDataTypeFromString);
     REGISTER_API(RegisterHook);
 }
