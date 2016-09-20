@@ -71,6 +71,7 @@
 /* Hook types */
 #define REDISMODULE_HOOK_RDB_AUX_SAVE   0       /* Called on RDB save, before keys */
 #define REDISMODULE_HOOK_RDB_AUX_LOAD   1       /* Called on RDB load, per AUX field */
+#define REDISMODULE_HOOK_CRON           2       /* Called every second */
 
 /* ------------------------- End of common defines ------------------------ */
 

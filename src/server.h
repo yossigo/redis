@@ -1074,9 +1074,6 @@ struct redisServer {
     int watchdog_period;  /* Software watchdog period in ms. 0 = off */
     /* System hardware info */
     size_t system_memory_size;  /* Total memory in system as reported by OS */
-
-    /* Temporary hack to call crdt cron periodically */
-    void (*cron_callback)(void);
 };
 
 typedef struct pubsubPattern {
@@ -1191,6 +1188,7 @@ moduleType *moduleTypeLookupModuleByID(uint64_t id);
 void moduleTypeNameByID(char *name, uint64_t moduleid);
 int moduleHookRDBAuxSave(rio *rdb);
 int moduleHookRDBAuxLoad(robj *key, robj *value);
+void moduleHookCron(void);
 
 /* Utils */
 long long ustime(void);

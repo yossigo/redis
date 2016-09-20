@@ -23,7 +23,8 @@ typedef int (*RedisModuleCmdFunc) (struct RedisModuleCtx *ctx, void **argv, int 
 
 #define REDISMODULE_HOOK_RDB_AUX_SAVE   0
 #define REDISMODULE_HOOK_RDB_AUX_LOAD   1
-#define REDISMODULE_HOOK_MAX            REDISMODULE_HOOK_RDB_AUX_LOAD
+#define REDISMODULE_HOOK_CRON           2
+#define REDISMODULE_HOOK_MAX            REDISMODULE_HOOK_CRON
 
 /* This structure represents a module inside the system. */
 struct RedisModule {
@@ -3022,6 +3023,12 @@ int moduleInvokeHook(int hook_type, RedisModuleHookArg *arg, int ignore_errors) 
     dictReleaseIterator(di);
 
     return ret;
+}
+
+/* Invoke cron hooks. */
+void moduleHookCron(void)
+{
+    moduleInvokeHook(REDISMODULE_HOOK_CRON, NULL, 0);
 }
 
 /* Invoke RDBAuxSave hook.  Returns -1 if an error occured or 1 on success.
