@@ -3030,8 +3030,13 @@ int moduleInvokeHook(int hook_type, RedisModuleHookArg *arg, int ignore_errors) 
 
         if (module->hooks[hook_type]) {
             RedisModuleCtx ctx = REDISMODULE_CTX_INIT;
+            struct client client;
 
+            memset(&client, 0, sizeof(client));
+            client.db = &server.db[0];
             ctx.module = module;
+            ctx.client = &client;
+
             if (module->hooks[hook_type](&ctx, arg) == REDISMODULE_ERR) {
                 if (!ignore_errors) ret = -1;
             } else {
