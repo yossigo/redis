@@ -3070,17 +3070,27 @@ int moduleHookRDBAuxSave(rio *rdb) {
     return 1;
 }
 
-/* Invoke RDBAuxLoad hook, returns the number of hook functions that returned success value.
+/* Invoke RDBAuxLoad hook, returns the number of hook functions that returned success value,
+ * or -1 if a fatal error occured.
  */
 int moduleHookRDBAuxLoad(robj *key, robj *value)
 {
+    int error = 0;
+    int ret;
+
     RedisModuleHookArg arg = {
         .rdb_aux_load = {
             .key = key,
-            .value = value
+            .value = value,
+            .error = &error
         }
     };
-    return moduleInvokeHook(REDISMODULE_HOOK_RDB_AUX_LOAD, &arg, 1);
+    ret = moduleInvokeHook(REDISMODULE_HOOK_RDB_AUX_LOAD, &arg, 1);
+    if (!error) {
+        return ret;
+    } else {
+        return -1;
+    }
 }
 
 /* --------------------------------------------------------------------------

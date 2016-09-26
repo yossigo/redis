@@ -104,6 +104,7 @@ typedef union {
     struct {
         const RedisModuleString *key;
         const RedisModuleString *value;
+        int *error;
     } rdb_aux_load;
 } RedisModuleHookArg;
 

@@ -1400,6 +1400,7 @@ int rdbLoadRio(rio *rdb) {
     redisDb *db = server.db+0;
     char buf[1024];
     long long expiretime, now = mstime();
+    int ret = 0;
 
     rdb->update_cksum = rdbLoadProgressCallback;
     rdb->max_processing_chunk = server.loading_process_events_interval_bytes;
@@ -1485,7 +1486,13 @@ int rdbLoadRio(rio *rdb) {
                 serverLog(LL_NOTICE,"RDB '%s': %s",
                     (char*)auxkey->ptr,
                     (char*)auxval->ptr);
-            } else if (moduleHookRDBAuxLoad(auxkey, auxval) <= 0) {
+            } else if ((ret = moduleHookRDBAuxLoad(auxkey, auxval)) <= 0) {
+                if (ret == -1) {
+                    decrRefCount(auxkey);
+                    decrRefCount(auxval);
+                    errno = EINVAL;
+                    return C_ERR;
+                }
                 /* We ignore fields we don't understand, as by AUX field
                  * contract. */
                 serverLog(LL_DEBUG,"Unrecognized RDB AUX field: '%s'",
