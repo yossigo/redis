@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2016, Salvatore Sanfilippo <antirez at gmail dot com>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -219,6 +219,7 @@ struct redisCommand redisCommandTable[] = {
     {"msetnx",msetnxCommand,-3,"wm",0,NULL,1,-1,2,0,0},
     {"randomkey",randomkeyCommand,1,"rR",0,NULL,0,0,0,0,0},
     {"select",selectCommand,2,"lF",0,NULL,0,0,0,0,0},
+    {"swapdb",swapdbCommand,3,"wF",0,NULL,0,0,0,0,0},
     {"move",moveCommand,3,"wF",0,NULL,1,1,1,0,0},
     {"rename",renameCommand,3,"w",0,NULL,1,2,1,0,0},
     {"renamenx",renamenxCommand,3,"wF",0,NULL,1,2,1,0,0},
@@ -1078,7 +1079,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
             {
                 serverLog(LL_NOTICE,"%d changes in %d seconds. Saving...",
                     sp->changes, (int)sp->seconds);
-                rdbSaveBackground(server.rdb_filename);
+                rdbSaveBackground(server.rdb_filename,NULL);
                 break;
             }
          }
@@ -1154,7 +1155,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         (server.unixtime-server.lastbgsave_try > CONFIG_BGSAVE_RETRY_DELAY ||
          server.lastbgsave_status == C_OK))
     {
-        if (rdbSaveBackground(server.rdb_filename) == C_OK)
+        if (rdbSaveBackground(server.rdb_filename,NULL) == C_OK)
             server.rdb_bgsave_scheduled = 0;
     }
 
@@ -1198,6 +1199,10 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
      * in WAIT. */
     if (listLength(server.clients_waiting_acks))
         processClientsWaitingReplicas();
+
+    /* Check if there are clients unblocked by modules that implement
+     * blocking commands. */
+    moduleHandleBlockedClients();
 
     /* Try to process pending commands for clients that were just unblocked. */
     if (listLength(server.unblocked_clients))
@@ -1308,10 +1313,12 @@ void initServerConfig(void) {
     int j;
 
     getRandomHexChars(server.runid,CONFIG_RUN_ID_SIZE);
+    server.runid[CONFIG_RUN_ID_SIZE] = '\0';
+    changeReplicationId();
+    clearReplicationId2();
     server.configfile = NULL;
     server.executable = NULL;
     server.hz = CONFIG_DEFAULT_HZ;
-    server.runid[CONFIG_RUN_ID_SIZE] = '\0';
     server.arch_bits = (sizeof(long) == 8) ? 64 : 32;
     server.port = CONFIG_DEFAULT_SERVER_PORT;
     server.tcp_backlog = CONFIG_DEFAULT_TCP_BACKLOG;
@@ -1408,7 +1415,7 @@ void initServerConfig(void) {
     server.masterport = 6379;
     server.master = NULL;
     server.cached_master = NULL;
-    server.repl_master_initial_offset = -1;
+    server.master_initial_offset = -1;
     server.repl_state = REPL_STATE_NONE;
     server.repl_syncio_timeout = CONFIG_REPL_SYNCIO_TIMEOUT;
     server.repl_serve_stale_data = CONFIG_DEFAULT_SLAVE_SERVE_STALE_DATA;
@@ -2470,7 +2477,7 @@ int prepareForShutdown(int flags) {
     if ((server.saveparamslen > 0 && !nosave) || save) {
         serverLog(LL_NOTICE,"Saving the final RDB snapshot before exiting.");
         /* Snapshotting. Perform a SYNC SAVE and exit */
-        if (rdbSave(server.rdb_filename) != C_OK) {
+        if (rdbSave(server.rdb_filename,NULL) != C_OK) {
             /* Ooops.. error saving! The best we can do is to continue
              * operating. Note that if there was a background saving process,
              * in the next cron() Redis will be notified that the background
@@ -3134,12 +3141,18 @@ sds genRedisInfoString(char *section) {
             }
         }
         info = sdscatprintf(info,
+            "master_replid:%s\r\n"
+            "master_replid2:%s\r\n"
             "master_repl_offset:%lld\r\n"
+            "second_repl_offset:%lld\r\n"
             "repl_backlog_active:%d\r\n"
             "repl_backlog_size:%lld\r\n"
             "repl_backlog_first_byte_offset:%lld\r\n"
             "repl_backlog_histlen:%lld\r\n",
+            server.replid,
+            server.replid2,
             server.master_repl_offset,
+            server.second_replid_offset,
             server.repl_backlog != NULL,
             server.repl_backlog_size,
             server.repl_backlog_off,
@@ -3415,9 +3428,20 @@ void loadDataFromDisk(void) {
         if (loadAppendOnlyFile(server.aof_filename) == C_OK)
             serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
     } else {
-        if (rdbLoad(server.rdb_filename) == C_OK) {
+        rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
+        if (rdbLoad(server.rdb_filename,&rsi) == C_OK) {
             serverLog(LL_NOTICE,"DB loaded from disk: %.3f seconds",
                 (float)(ustime()-start)/1000000);
+
+            /* Restore the replication ID / offset from the RDB file. */
+            if (rsi.repl_id_is_set && rsi.repl_offset != -1) {
+                memcpy(server.replid,rsi.repl_id,sizeof(server.replid));
+                server.master_repl_offset = rsi.repl_offset;
+                /* If we are a slave, create a cached master from this
+                 * information, in order to allow partial resynchronizations
+                 * with masters. */
+                if (server.masterhost) replicationCacheMasterUsingMyself();
+            }
         } else if (errno != ENOENT) {
             serverLog(LL_WARNING,"Fatal error loading the DB: %s. Exiting.",strerror(errno));
             exit(1);
