@@ -522,15 +522,18 @@ typedef struct RedisModuleIO {
     moduleType *type;   /* Module type doing the operation. */
     int error;          /* True if error condition happened. */
     struct RedisModuleCtx *ctx; /* Optional context, see RM_GetContextFromIO()*/
+    struct redisObject *key;    /* Optional name of key processed */
 } RedisModuleIO;
 
-#define moduleInitIOContext(iovar,mtype,rioptr) do { \
+#define moduleInitIOContext(iovar,mtype,rioptr,keyptr) do { \
     iovar.rio = rioptr; \
     iovar.type = mtype; \
     iovar.bytes = 0; \
     iovar.error = 0; \
+    iovar.key = keyptr; \
     iovar.ctx = NULL; \
 } while(0);
+
 
 /* Objects encoding. Some kind of objects like Strings and Hashes can be
  * internally represented in multiple ways. The 'encoding' field of the object

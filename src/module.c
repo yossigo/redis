@@ -3032,6 +3032,14 @@ RedisModuleCtx *RM_GetContextFromIO(RedisModuleIO *io) {
     return io->ctx;
 }
 
+/* Returns a RedisModuleString with the name of the key currently saving or
+ * loading, when an IO data type callback is called.  There is no guarantee
+ * that the key name is always available, so this may return NULL.
+ */
+const RedisModuleString *RM_GetKeyNameFromIO(RedisModuleIO *io) {
+    return io->key;
+}
+
 /* --------------------------------------------------------------------------
  * Logging
  * -------------------------------------------------------------------------- */
@@ -3310,7 +3318,7 @@ int moduleHookRDBAuxSave(rio *rdb) {
     RedisModuleIO io;
     RedisModuleHookArg arg;
 
-    moduleInitIOContext(io,NULL,rdb);
+    moduleInitIOContext(io,NULL,rdb,NULL);
     arg.rdb_aux_save.io = &io;
 
     if (io.error || moduleInvokeHook(REDISMODULE_HOOK_RDB_AUX_SAVE, &arg, 0) < 0)
@@ -3577,7 +3585,7 @@ void *RM_LoadDataTypeFromString(const RedisModuleString *str, const moduleType *
     RedisModuleIO io;
 
     rioInitWithBuffer(&payload, str->ptr);
-    moduleInitIOContext(io,(moduleType *)mt,&payload);
+    moduleInitIOContext(io,(moduleType *)mt,&payload,NULL);
     return mt->rdb_load(&io,0);
 }
 
@@ -3588,7 +3596,7 @@ RedisModuleString *RM_SaveDataTypeToString(RedisModuleCtx *ctx, void *data, cons
     RedisModuleIO io;
 
     rioInitWithBuffer(&payload,sdsempty());
-    moduleInitIOContext(io,(moduleType *)mt,&payload);
+    moduleInitIOContext(io,(moduleType *)mt,&payload,NULL);
     mt->rdb_save(&io,data);
     if (io.error) {
         return NULL;
@@ -3697,6 +3705,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(RetainString);
     REGISTER_API(StringCompare);
     REGISTER_API(GetContextFromIO);
+    REGISTER_API(GetKeyNameFromIO);
     REGISTER_API(BlockClient);
     REGISTER_API(UnblockClient);
     REGISTER_API(IsBlockedReplyRequest);
