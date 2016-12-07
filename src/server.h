@@ -201,6 +201,7 @@ typedef long long mstime_t; /* millisecond time type. */
 #define CMD_FAST (1<<13)            /* "F" flag */
 #define CMD_MODULE_GETKEYS (1<<14)  /* Use the modules getkeys interface. */
 #define CMD_MODULE_NO_CLUSTER (1<<15) /* Deny on Redis Cluster. */
+#define CMD_RAW_OUTPUT (1<<16)      /* Command output is raw text. */
 
 /* AOF states */
 #define AOF_OFF 0             /* AOF is off */

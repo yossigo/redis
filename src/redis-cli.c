@@ -205,6 +205,8 @@ static sds getDotfilePath(char *envoverride, char *dotfilename) {
 #define CLI_HELP_COMMAND 1
 #define CLI_HELP_GROUP 2
 
+#define CMD_FLAG_RAW_OUTPUT 1
+
 typedef struct {
     int type;
     int argc;
@@ -213,6 +215,9 @@ typedef struct {
 
     /* Only used for help on commands */
     struct commandHelp *org;
+
+    /* Additional command flags */
+    int flags;
 } helpEntry;
 
 static helpEntry *helpEntries;
@@ -294,7 +299,13 @@ static void cliIntegrateHelp(void) {
         new->argv[0] = sdsnew(cmdname);
         new->full = new->argv[0];
         new->type = CLI_HELP_COMMAND;
+        new->flags = 0;
         sdstoupper(new->argv[0]);
+
+        redisReply *flags = entry->element[2];
+        for (size_t j = 0; j < flags->elements; j++) {
+            if (!strcasecmp(flags->element[j]->str, "raw_output")) new->flags |= CMD_FLAG_RAW_OUTPUT;
+        }
 
         struct commandHelp *ch = zmalloc(sizeof(*ch));
         ch->name = new->argv[0];
@@ -858,6 +869,15 @@ static int cliSendCommand(int argc, char **argv, int repeat) {
                        !strcasecmp(argv[1],"doctor")))
     {
         output_raw = 1;
+    }
+
+    /* Also check command flags */
+    for (j = 0; j < helpEntriesLen; j++) {
+        helpEntry *he = helpEntries+j;
+        if (!strcasecmp(he->argv[0],command)) {
+           if (he->flags & CMD_FLAG_RAW_OUTPUT) output_raw = 1;
+           break;
+        }
     }
 
     if (!strcasecmp(command,"shutdown")) config.shutdown = 1;
