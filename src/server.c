@@ -1901,6 +1901,7 @@ void initServer(void) {
     server.system_memory_size = zmalloc_get_memory_size();
 
     createSharedObjects();
+#ifndef REDIS_EMBEDDED
     adjustOpenFilesLimit();
     server.el = aeCreateEventLoop(server.maxclients+CONFIG_FDSET_INCR);
     if (server.el == NULL) {
@@ -1909,6 +1910,7 @@ void initServer(void) {
             strerror(errno));
         exit(1);
     }
+#endif
     server.db = zmalloc(sizeof(redisDb)*server.dbnum);
 
     /* Open the TCP listening socket for the user commands. */
@@ -1928,11 +1930,13 @@ void initServer(void) {
         anetNonBlock(NULL,server.sofd);
     }
 
+#ifndef REDIS_EMBEDDED
     /* Abort if there are no listening sockets at all. */
     if (server.ipfd_count == 0 && server.sofd < 0) {
         serverLog(LL_WARNING, "Configured to not listen anywhere, exiting.");
         exit(1);
     }
+#endif
 
     /* Create the Redis databases, and initialize other internal state. */
     for (j = 0; j < server.dbnum; j++) {
@@ -1982,6 +1986,7 @@ void initServer(void) {
     server.repl_good_slaves_count = 0;
     updateCachedTime();
 
+#ifndef REDIS_EMBEDDED
     /* Create the timer callback, this is our way to process many background
      * operations incrementally, like clients timeout, eviction of unaccessed
      * expired keys and so forth. */
@@ -2012,6 +2017,7 @@ void initServer(void) {
                 "Error registering the readable event for the module "
                 "blocked clients subsystem.");
     }
+#endif
 
     /* Open the AOF file if needed. */
     if (server.aof_state == AOF_ON) {
@@ -3798,7 +3804,7 @@ int redisIsSupervised(int mode) {
     return 0;
 }
 
-
+#ifndef REDIS_EMBEDDED
 int main(int argc, char **argv) {
     struct timeval tv;
     int j;
@@ -3993,5 +3999,6 @@ int main(int argc, char **argv) {
     aeDeleteEventLoop(server.el);
     return 0;
 }
+#endif  /* REDIS_EMBEDDED */
 
 /* The End */
