@@ -25,7 +25,7 @@ int eredis_init(void) {
 
 struct eredis_client {
     client *client;
-    size_t reply_bytes_read;
+    int buf_consumed;
     listIter reply_iter;
 };
 
@@ -60,7 +60,8 @@ int eredis_prepare_request(eredis_client_t *c, int args_count, const char **args
         rc->argv[i] = createStringObject(args[i], len);
     }
     rc->bufpos = 0;
-    c->reply_bytes_read = 0;
+    listEmpty(rc->reply);
+    c->buf_consumed = 0;
 
     return 0;
 }
@@ -75,20 +76,21 @@ int eredis_execute(eredis_client_t *c)
 
 const char *eredis_read_reply_chunk(eredis_client_t *c, int *chunk_len)
 {
-    if (!c->reply_bytes_read) {
+    if (!c->buf_consumed) {
         listRewind(c->client->reply, &c->reply_iter);
-        c->reply_bytes_read = c->client->bufpos;
-        *chunk_len = c->client->bufpos;
-        return c->client->buf;
-    } else {
-        listNode *ln = listNext(&c->reply_iter);
-        if (ln) {
-            sds val = listNodeValue(ln);
-            *chunk_len = sdslen(val);
-            return val;
-        } else {
-            return NULL;
+        c->buf_consumed = 1;
+        if (c->client->bufpos) {
+            *chunk_len = c->client->bufpos;
+            return c->client->buf;
         }
     }
-}
 
+    listNode *ln = listNext(&c->reply_iter);
+    if (ln) {
+        sds val = listNodeValue(ln);
+        *chunk_len = sdslen(val);
+        return val;
+    } else {
+        return NULL;
+    }
+}
