@@ -2300,9 +2300,15 @@ void call(client *c, int flags) {
 
     /* Call the command. */
     dirty = server.dirty;
+#ifndef REDIS_EMBEDDED
     start = ustime();
+#endif
     c->cmd->proc(c);
+#ifndef REDIS_EMBEDDED
     duration = ustime()-start;
+#else
+    duration = 0;
+#endif
     dirty = server.dirty-dirty;
     if (dirty < 0) dirty = 0;
 
@@ -2321,6 +2327,7 @@ void call(client *c, int flags) {
             server.lua_caller->flags |= CLIENT_FORCE_AOF;
     }
 
+#ifndef REDIS_EMBEDDED
     /* Log the command into the Slow log if needed, and populate the
      * per-command statistics that we show in INFO commandstats. */
     if (flags & CMD_CALL_SLOWLOG && c->cmd->proc != execCommand) {
@@ -2333,6 +2340,7 @@ void call(client *c, int flags) {
         c->lastcmd->microseconds += duration;
         c->lastcmd->calls++;
     }
+#endif
 
     /* Propagate the command into the AOF and replication link */
     if (flags & CMD_CALL_PROPAGATE &&
