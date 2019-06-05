@@ -231,6 +231,8 @@ typedef struct RedisModuleBlockedClient {
 static pthread_mutex_t moduleUnblockedClientsMutex = PTHREAD_MUTEX_INITIALIZER;
 static list *moduleUnblockedClients;
 
+static list *moduleClientDisconnectCallbacks;
+
 /* We need a mutex that is unlocked / relocked in beforeSleep() in order to
  * allow thread safe contexts to execute commands at a safe moment. */
 static pthread_mutex_t moduleGIL = PTHREAD_MUTEX_INITIALIZER;
@@ -3866,6 +3868,7 @@ RedisModuleCtx *RM_GetThreadSafeContext(RedisModuleBlockedClient *bc) {
      * in order to keep things like the currently selected database and similar
      * things. */
     ctx->client = createClient(-1);
+    ctx->client->flags |= CLIENT_MODULE;
     if (bc) {
         selectDb(ctx->client,bc->dbid);
         ctx->client->id = bc->client->id;
@@ -5081,6 +5084,9 @@ void moduleInitModulesSystem(void) {
     /* Our thread-safe contexts GIL must start with already locked:
      * it is just unlocked when it's safe. */
     pthread_mutex_lock(&moduleGIL);
+
+    /* RedisRaft Temp API */
+    moduleClientDisconnectCallbacks = listCreate();
 }
 
 /* Load all the modules in the server.loadmodule_queue list, which is
@@ -5311,6 +5317,31 @@ size_t moduleCount(void) {
     return dictSize(modules);
 }
 
+typedef void (*RedisModuleClientDisconnectCallbackFunc)(unsigned long long client_id);
+
+int RM_RegisterClientDisconnectCallback(RedisModuleClientDisconnectCallbackFunc cb)
+{
+    listAddNodeTail(moduleClientDisconnectCallbacks, (void *) cb);
+    return REDISMODULE_OK;
+}
+
+void moduleCallClientDisconnectCallback(client *c)
+{
+    listIter li;
+    listNode *ln;
+
+    /* Ignore module pseudo clients */
+    if (c->flags & CLIENT_MODULE) {
+        return;
+    }
+
+    listRewind(moduleClientDisconnectCallbacks, &li);
+    while ((ln = listNext(&li))) {
+        RedisModuleClientDisconnectCallbackFunc callback = ln->value;
+        callback(c->id);
+    }
+}
+
 /* Register all the APIs we export. Keep this function at the end of the
  * file so that's easy to seek it to add new entries. */
 void moduleRegisterCoreAPI(void) {
@@ -5476,4 +5507,5 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(CommandFilterArgInsert);
     REGISTER_API(CommandFilterArgReplace);
     REGISTER_API(CommandFilterArgDelete);
+    REGISTER_API(RegisterClientDisconnectCallback);
 }

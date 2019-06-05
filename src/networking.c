@@ -1063,6 +1063,7 @@ void freeClient(client *c) {
      * and finally release the client structure itself. */
     if (c->name) decrRefCount(c->name);
     zfree(c->argv);
+    moduleCallClientDisconnectCallback(c);
     freeClientMultiState(c);
     sdsfree(c->peerid);
     zfree(c);
