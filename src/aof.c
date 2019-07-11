@@ -655,7 +655,7 @@ struct client *createFakeClient(void) {
     struct client *c = zmalloc(sizeof(*c));
 
     selectDb(c,0);
-    c->fd = -1;
+    c->conn.fd = -1;
     c->name = NULL;
     c->querybuf = sdsempty();
     c->querybuf_peak = 0;

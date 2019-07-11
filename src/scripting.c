@@ -1615,7 +1615,7 @@ void ldbFlushLog(list *log) {
 void ldbEnable(client *c) {
     c->flags |= CLIENT_LUA_DEBUG;
     ldbFlushLog(ldb.logs);
-    ldb.fd = c->fd;
+    ldb.fd = c->conn.fd;
     ldb.step = 1;
     ldb.bpcount = 0;
     ldb.luabp = 0;
@@ -1751,7 +1751,7 @@ void ldbEndSession(client *c) {
 
     /* If it's a fork()ed session, we just exit. */
     if (ldb.forked) {
-        writeToClient(c->fd, c, 0);
+        writeToClient(c,0);
         serverLog(LL_WARNING,"Lua debugging session child exiting");
         exitFromChild(0);
     } else {

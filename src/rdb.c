@@ -2217,8 +2217,8 @@ void backgroundSaveDoneHandlerSocket(int exitcode, int bysignal) {
                 "Slave %s correctly received the streamed RDB file.",
                     replicationGetSlaveName(slave));
                 /* Restore the socket as non-blocking. */
-                anetNonBlock(NULL,slave->fd);
-                anetSendTimeout(NULL,slave->fd,0);
+                anetNonBlock(NULL,slave->conn.fd);
+                anetSendTimeout(NULL,slave->conn.fd,0);
             }
         }
     }
@@ -2288,13 +2288,13 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
 
         if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_START) {
             clientids[numfds] = slave->id;
-            fds[numfds++] = slave->fd;
+            fds[numfds++] = slave->conn.fd;
             replicationSetupSlaveForFullResync(slave,getPsyncInitialOffset());
             /* Put the socket in blocking mode to simplify RDB transfer.
              * We'll restore it when the children returns (since duped socket
              * will share the O_NONBLOCK attribute with the parent). */
-            anetBlock(NULL,slave->fd);
-            anetSendTimeout(NULL,slave->fd,server.repl_timeout*1000);
+            anetBlock(NULL,slave->conn.fd);
+            anetSendTimeout(NULL,slave->conn.fd,server.repl_timeout*1000);
         }
     }
 

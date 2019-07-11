@@ -703,7 +703,7 @@ void _serverAssertPrintClientInfo(const client *c) {
     bugReportStart();
     serverLog(LL_WARNING,"=== ASSERTION FAILED CLIENT CONTEXT ===");
     serverLog(LL_WARNING,"client->flags = %d", c->flags);
-    serverLog(LL_WARNING,"client->fd = %d", c->fd);
+    serverLog(LL_WARNING,"client->fd = %d", c->conn.fd);
     serverLog(LL_WARNING,"client->argc = %d", c->argc);
     for (j=0; j < c->argc; j++) {
         char buf[128];
@@ -1202,7 +1202,7 @@ void logCurrentClient(void) {
     }
 }
 
-#if defined(HAVE_PROC_MAPS)
+#if 0
 
 #define MEMTEST_MAX_REGIONS 128
 
@@ -1337,7 +1337,7 @@ void sigsegvHandler(int sig, siginfo_t *info, void *secret) {
     /* Log dump of processor registers */
     logRegisters(uc);
 
-#if defined(HAVE_PROC_MAPS)
+#if 0
     /* Test memory */
     serverLogRaw(LL_WARNING|LL_RAW, "\n------ FAST MEMORY TEST ------\n");
     bioKillThreads();

@@ -4232,7 +4232,7 @@ sds genRedisInfoString(char *section) {
                 long lag = 0;
 
                 if (slaveip[0] == '\0') {
-                    if (anetPeerToString(slave->fd,ip,sizeof(ip),&port) == -1)
+                    if (anetPeerToString(slave->conn.fd,ip,sizeof(ip),&port) == -1)
                         continue;
                     slaveip = ip;
                 }

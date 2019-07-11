@@ -96,20 +96,16 @@ client *createClient(int fd) {
         anetEnableTcpNoDelay(NULL,fd);
         if (server.tcpkeepalive)
             anetKeepAlive(NULL,fd,server.tcpkeepalive);
-        if (aeCreateFileEvent(server.el,fd,AE_READABLE,
-            readQueryFromClient, c) == AE_ERR)
-        {
-            close(fd);
-            zfree(c);
-            return NULL;
-        }
+        connInitialize(&c->conn, &ConnectionTypeTCP, fd, c);
+        connSetReadHandler(&c->conn, readQueryFromClient);
+    } else {
+        c->conn.fd = -1;
     }
 
     selectDb(c,0);
     uint64_t client_id = ++server.next_client_id;
     c->id = client_id;
     c->resp = 2;
-    c->fd = fd;
     c->name = NULL;
     c->bufpos = 0;
     c->qb_pos = 0;
@@ -226,7 +222,7 @@ int prepareClientToWrite(client *c) {
     if ((c->flags & CLIENT_MASTER) &&
         !(c->flags & CLIENT_MASTER_FORCE_REPLY)) return C_ERR;
 
-    if (c->fd <= 0) return C_ERR; /* Fake client for AOF loading. */
+    if (!connIsInitialized(&c->conn)) return C_ERR; /* Fake client for AOF loading. */
 
     /* Schedule the client to write the output buffers to the socket, unless
      * it should already be setup to do so (it has already pending data). */
@@ -794,7 +790,7 @@ static void acceptCommonHandler(int fd, int flags, char *ip) {
         char *err = "-ERR max number of clients reached\r\n";
 
         /* That's a best effort error message, don't check write errors */
-        if (write(c->fd,err,strlen(err)) == -1) {
+        if (connWrite(&c->conn,err,strlen(err)) == -1) {
             /* Nothing to do, Just to avoid the warning... */
         }
         server.stat_rejected_conn++;
@@ -834,7 +830,7 @@ static void acceptCommonHandler(int fd, int flags, char *ip) {
                 "4) Setup a bind address or an authentication password. "
                 "NOTE: You only need to do one of the above things in order for "
                 "the server to start accepting connections from the outside.\r\n";
-            if (write(c->fd,err,strlen(err)) == -1) {
+            if (connWrite(&c->conn,err,strlen(err)) == -1) {
                 /* Nothing to do, Just to avoid the warning... */
             }
             server.stat_rejected_conn++;
@@ -916,7 +912,7 @@ void unlinkClient(client *c) {
     /* Certain operations must be done only if the client has an active socket.
      * If the client was already unlinked or if it's a "fake client" the
      * fd is already set to -1. */
-    if (c->fd != -1) {
+    if (connIsInitialized(&c->conn)) {
         /* Remove from the list of active clients. */
         if (c->client_list_node) {
             uint64_t id = htonu64(c->id);
@@ -930,16 +926,9 @@ void unlinkClient(client *c) {
          * shutdown the socket the fork will continue to write to the slave
          * and the salve will only find out that it was disconnected when
          * it will finish reading the rdb. */
-        if ((c->flags & CLIENT_SLAVE) &&
-            (c->replstate == SLAVE_STATE_WAIT_BGSAVE_END)) {
-            shutdown(c->fd, SHUT_RDWR);
-        }
-
-        /* Unregister async I/O handlers and close the socket. */
-        aeDeleteFileEvent(server.el,c->fd,AE_READABLE);
-        aeDeleteFileEvent(server.el,c->fd,AE_WRITABLE);
-        close(c->fd);
-        c->fd = -1;
+        int need_shutdown = ((c->flags & CLIENT_SLAVE) &&
+                (c->replstate == SLAVE_STATE_WAIT_BGSAVE_END));
+        connClose(&c->conn, need_shutdown);
     }
 
     /* Remove from the list of pending writes if needed. */
@@ -1108,19 +1097,22 @@ client *lookupClientByID(uint64_t id) {
 
 /* Write data in output buffers to client. Return C_OK if the client
  * is still valid after the call, C_ERR if it was freed because of some
- * error.
+ * error.  If handler_installed is set, it will attempt to clear the
+ * write event.
+ *
+ * TODO: rename handler_installed.
  *
  * This function is called by threads, but always with handler_installed
  * set to 0. So when handler_installed is set to 0 the function must be
  * thread safe. */
-int writeToClient(int fd, client *c, int handler_installed) {
+int writeToClient(client *c, int handler_installed) {
     ssize_t nwritten = 0, totwritten = 0;
     size_t objlen;
     clientReplyBlock *o;
 
     while(clientHasPendingReplies(c)) {
         if (c->bufpos > 0) {
-            nwritten = write(fd,c->buf+c->sentlen,c->bufpos-c->sentlen);
+            nwritten = connWrite(&c->conn,c->buf+c->sentlen,c->bufpos-c->sentlen);
             if (nwritten <= 0) break;
             c->sentlen += nwritten;
             totwritten += nwritten;
@@ -1141,7 +1133,7 @@ int writeToClient(int fd, client *c, int handler_installed) {
                 continue;
             }
 
-            nwritten = write(fd, o->buf + c->sentlen, objlen - c->sentlen);
+            nwritten = connWrite(&c->conn, o->buf + c->sentlen, objlen - c->sentlen);
             if (nwritten <= 0) break;
             c->sentlen += nwritten;
             totwritten += nwritten;
@@ -1198,7 +1190,7 @@ int writeToClient(int fd, client *c, int handler_installed) {
          * adDeleteFileEvent() is not thread safe: however writeToClient()
          * is always called with handler_installed set to 0 from threads
          * so we are fine. */
-        if (handler_installed) aeDeleteFileEvent(server.el,c->fd,AE_WRITABLE);
+        if (handler_installed) connSetWriteHandler(&c->conn, NULL);
 
         /* Close connection after entire reply has been sent. */
         if (c->flags & CLIENT_CLOSE_AFTER_REPLY) {
@@ -1210,10 +1202,9 @@ int writeToClient(int fd, client *c, int handler_installed) {
 }
 
 /* Write event handler. Just send data to the client. */
-void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask) {
-    UNUSED(el);
-    UNUSED(mask);
-    writeToClient(fd,privdata,1);
+void sendReplyToClient(connection *conn) {
+    /* TODO: should really use container_of() here */
+    writeToClient((client *)conn->privdata,1);
 }
 
 /* This function is called just before entering the event loop, in the hope
@@ -1236,7 +1227,7 @@ int handleClientsWithPendingWrites(void) {
         if (c->flags & CLIENT_PROTECTED) continue;
 
         /* Try to write buffers to the client socket. */
-        if (writeToClient(c->fd,c,0) == C_ERR) continue;
+        if (writeToClient(c,0) == C_ERR) continue;
 
         /* If after the synchronous writes above we still have data to
          * output to the client, we need to install the writable handler. */
@@ -1252,10 +1243,9 @@ int handleClientsWithPendingWrites(void) {
             {
                 ae_flags |= AE_BARRIER;
             }
-            if (aeCreateFileEvent(server.el, c->fd, ae_flags,
-                sendReplyToClient, c) == AE_ERR)
-            {
-                    freeClientAsync(c);
+            /* TODO: Handle write barriers in connection */
+            if (connSetWriteHandler(&c->conn, sendReplyToClient) == C_ERR) {
+                freeClientAsync(c);
             }
         }
     }
@@ -1301,15 +1291,15 @@ void resetClient(client *c) {
  *    path, it is not really released, but only marked for later release. */
 void protectClient(client *c) {
     c->flags |= CLIENT_PROTECTED;
-    aeDeleteFileEvent(server.el,c->fd,AE_READABLE);
-    aeDeleteFileEvent(server.el,c->fd,AE_WRITABLE);
+    connSetReadHandler(&c->conn,NULL);
+    connSetWriteHandler(&c->conn,NULL);
 }
 
 /* This will undo the client protection done by protectClient() */
 void unprotectClient(client *c) {
     if (c->flags & CLIENT_PROTECTED) {
         c->flags &= ~CLIENT_PROTECTED;
-        aeCreateFileEvent(server.el,c->fd,AE_READABLE,readQueryFromClient,c);
+        connSetReadHandler(&c->conn,readQueryFromClient);
         if (clientHasPendingReplies(c)) clientInstallWriteHandler(c);
     }
 }
@@ -1706,12 +1696,10 @@ void processInputBufferAndReplicate(client *c) {
     }
 }
 
-void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
-    client *c = (client*) privdata;
+void readQueryFromClient(connection *conn) {
+    client *c = (client*) conn->privdata;
     int nread, readlen;
     size_t qblen;
-    UNUSED(el);
-    UNUSED(mask);
 
     /* Check if we want to read from the client later when exiting from
      * the event loop. This is the case if threaded I/O is enabled. */
@@ -1737,7 +1725,7 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     qblen = sdslen(c->querybuf);
     if (c->querybuf_peak < qblen) c->querybuf_peak = qblen;
     c->querybuf = sdsMakeRoomFor(c->querybuf, readlen);
-    nread = read(fd, c->querybuf+qblen, readlen);
+    nread = connRead(&c->conn, c->querybuf+qblen, readlen);
     if (nread == -1) {
         if (errno == EAGAIN) {
             return;
@@ -1814,7 +1802,7 @@ void genClientPeerId(client *client, char *peerid,
         snprintf(peerid,peerid_len,"%s:0",server.unixsocket);
     } else {
         /* TCP client. */
-        anetFormatPeer(client->fd,peerid,peerid_len);
+        anetFormatPeer(client->conn.fd,peerid,peerid_len);
     }
 }
 
@@ -1858,7 +1846,7 @@ sds catClientInfoString(sds s, client *client) {
     if (p == flags) *p++ = 'N';
     *p++ = '\0';
 
-    emask = client->fd == -1 ? 0 : aeGetFileEvents(server.el,client->fd);
+    emask = client->conn.fd == -1 ? 0 : aeGetFileEvents(server.el,client->conn.fd);
     p = events;
     if (emask & AE_READABLE) *p++ = 'r';
     if (emask & AE_WRITABLE) *p++ = 'w';
@@ -1867,7 +1855,7 @@ sds catClientInfoString(sds s, client *client) {
         "id=%U addr=%s fd=%i name=%s age=%I idle=%I flags=%s db=%i sub=%i psub=%i multi=%i qbuf=%U qbuf-free=%U obl=%U oll=%U omem=%U events=%s cmd=%s user=%s",
         (unsigned long long) client->id,
         getClientPeerId(client),
-        client->fd,
+        client->conn.fd,
         client->name ? (char*)client->name->ptr : "",
         (long long)(server.unixtime - client->ctime),
         (long long)(server.unixtime - client->lastinteraction),
@@ -2394,7 +2382,7 @@ int checkClientOutputBufferLimits(client *c) {
  * called from contexts where the client can't be freed safely, i.e. from the
  * lower level functions pushing data inside the client output buffers. */
 void asyncCloseClientOnOutputBufferLimitReached(client *c) {
-    if (c->fd == -1) return; /* It is unsafe to free fake clients. */
+    if (!connIsInitialized(&c->conn)) return; /* It is unsafe to free fake clients. */
     serverAssert(c->reply_bytes < SIZE_MAX-(1024*64));
     if (c->reply_bytes == 0 || c->flags & CLIENT_CLOSE_ASAP) return;
     if (checkClientOutputBufferLimits(c)) {
@@ -2417,7 +2405,6 @@ void flushSlavesOutputBuffers(void) {
     listRewind(server.slaves,&li);
     while((ln = listNext(&li))) {
         client *slave = listNodeValue(ln);
-        int events;
 
         /* Note that the following will not flush output buffers of slaves
          * in STATE_ONLINE but having put_online_on_ack set to true: in this
@@ -2425,12 +2412,11 @@ void flushSlavesOutputBuffers(void) {
          * of put_online_on_ack is to postpone the moment it is installed.
          * This is what we want since slaves in this state should not receive
          * writes before the first ACK. */
-        events = aeGetFileEvents(server.el,slave->fd);
-        if (events & AE_WRITABLE &&
+        if (connHasWriteHandler(&slave->conn) &&
             slave->replstate == SLAVE_STATE_ONLINE &&
             clientHasPendingReplies(slave))
         {
-            writeToClient(slave->fd,slave,0);
+            writeToClient(slave,0);
         }
     }
 }
@@ -2557,9 +2543,9 @@ void *IOThreadMain(void *myid) {
         while((ln = listNext(&li))) {
             client *c = listNodeValue(ln);
             if (io_threads_op == IO_THREADS_OP_WRITE) {
-                writeToClient(c->fd,c,0);
+                writeToClient(c,0);
             } else if (io_threads_op == IO_THREADS_OP_READ) {
-                readQueryFromClient(NULL,c->fd,c,0);
+                readQueryFromClient(&c->conn);
             } else {
                 serverPanic("io_threads_op value is unknown");
             }
@@ -2700,8 +2686,7 @@ int handleClientsWithPendingWritesUsingThreads(void) {
         /* Install the write handler if there are pending writes in some
          * of the clients. */
         if (clientHasPendingReplies(c) &&
-            aeCreateFileEvent(server.el, c->fd, AE_WRITABLE,
-                sendReplyToClient, c) == AE_ERR)
+                connSetWriteHandler(&c->conn, sendReplyToClient) == AE_ERR)
         {
             freeClientAsync(c);
         }

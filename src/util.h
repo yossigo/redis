@@ -31,6 +31,7 @@
 #define __REDIS_UTIL_H
 
 #include <stdint.h>
+#include <stddef.h>
 #include "sds.h"
 
 /* The maximum number of characters needed to represent a long double
