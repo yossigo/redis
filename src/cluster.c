@@ -611,12 +611,35 @@ void freeClusterLink(clusterLink *link) {
     zfree(link);
 }
 
+static void clusterConnAcceptHandler(connection *conn) {
+    clusterLink *link;
+
+    if (connGetState(conn) != CONN_STATE_CONNECTED) {
+        serverLog(LL_VERBOSE,
+                "Error accepting cluster node connection: %s", connGetLastError(conn));
+        connClose(conn, 0);
+        /* TODO Fix! */
+        return;
+    }
+
+    /* Create a link object we use to handle the connection.
+     * It gets passed to the readable handler when data is available.
+     * Initiallly the link->node pointer is set to NULL as we don't know
+     * which node is, but the right node is references once we know the
+     * node identity. */
+    link = createClusterLink(NULL);
+    link->conn = conn;
+    connSetPrivateData(conn, link);
+
+    /* Register read handler */
+    connSetReadHandler(conn, clusterReadHandler);
+}
+
 #define MAX_CLUSTER_ACCEPTS_PER_CALL 1000
 void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     int cport, cfd;
     int max = MAX_CLUSTER_ACCEPTS_PER_CALL;
     char cip[NET_IP_STR_LEN];
-    clusterLink *link;
     UNUSED(el);
     UNUSED(mask);
     UNUSED(privdata);
@@ -630,23 +653,27 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         if (cfd == ANET_ERR) {
             if (errno != EWOULDBLOCK)
                 serverLog(LL_VERBOSE,
-                    "Error accepting cluster node: %s", server.neterr);
+                    "Error accepting cluster node socket: %s", server.neterr);
             return;
         }
-        anetNonBlock(NULL,cfd);
-        anetEnableTcpNoDelay(NULL,cfd);
+
+        connection *conn = connCreateAcceptedSocket(cfd);
+        connNonBlock(conn);
+        connEnableTcpNoDelay(conn);
 
         /* Use non-blocking I/O for cluster messages. */
-        serverLog(LL_VERBOSE,"Accepted cluster node %s:%d", cip, cport);
-        /* Create a link object we use to handle the connection.
-         * It gets passed to the readable handler when data is available.
-         * Initiallly the link->node pointer is set to NULL as we don't know
-         * which node is, but the right node is references once we know the
-         * node identity. */
-        link = createClusterLink(NULL);
-        connSetPrivateData(link->conn, link);
-        link->conn->fd = cfd;   /* TODO: Use accept */
-        connSetReadHandler(link->conn, clusterReadHandler);
+        serverLog(LL_VERBOSE,"Accepting cluster node connection from %s:%d", cip, cport);
+
+        /* Accept the connection now.  connAccept() may call our handler directly
+         * or schedule it for later depending on connection implementation.
+         */
+        if (connAccept(conn, clusterConnAcceptHandler) == C_ERR) {
+            serverLog(LL_VERBOSE,
+                    "Error accepting cluster node connection: %s",
+                    connGetLastError(conn));
+            connClose(conn, 0);
+            return;
+        }
     }
 }
 
@@ -3411,7 +3438,8 @@ void clusterCron(void) {
 
         if (node->link == NULL) {
             clusterLink *link = createClusterLink(node);
-
+            link->conn = connCreateSocket();
+            connSetPrivateData(link->conn, link);
             if (connConnect(link->conn, node->ip, node->cport, NET_FIRST_BIND_ADDR,
                         clusterLinkConnectHandler) == -1) {
                 /* We got a synchronous error from connect before

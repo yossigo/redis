@@ -772,31 +772,14 @@ int clientHasPendingReplies(client *c) {
     return c->bufpos || listLength(c->reply);
 }
 
-#define MAX_ACCEPTS_PER_CALL 1000
-static void acceptCommonHandler(int fd, int flags, char *ip) {
-    client *c;
-    connection *conn = connCreateSocket();
-    conn->fd = fd;  /* TODO replace with accept */
+void clientAcceptHandler(connection *conn) {
+    client *c = connGetPrivateData(conn);
+    char *ip = NULL;    /*TODO move it to conn */
 
-    if ((c = createClient(conn)) == NULL) {
+    if (connGetState(conn) != CONN_STATE_CONNECTED) {
         serverLog(LL_WARNING,
-            "Error registering fd event for the new client: %s (fd=%d)",
-            strerror(errno),fd);
-        connClose(conn, 0); /* May be already closed, just ignore errors */
-        return;
-    }
-    /* If maxclient directive is set and this is one client more... close the
-     * connection. Note that we create the client instead to check before
-     * for this condition, since now the socket is already set in non-blocking
-     * mode and we can send an error for free using the Kernel I/O */
-    if (listLength(server.clients) > server.maxclients) {
-        char *err = "-ERR max number of clients reached\r\n";
-
-        /* That's a best effort error message, don't check write errors */
-        if (connWrite(c->conn,err,strlen(err)) == -1) {
-            /* Nothing to do, Just to avoid the warning... */
-        }
-        server.stat_rejected_conn++;
+                "Error accepting a client connection: %s",
+                connGetLastError(conn));
         freeClient(c);
         return;
     }
@@ -808,7 +791,7 @@ static void acceptCommonHandler(int fd, int flags, char *ip) {
     if (server.protected_mode &&
         server.bindaddr_count == 0 &&
         DefaultUser->flags & USER_FLAG_NOPASS &&
-        !(flags & CLIENT_UNIX_SOCKET) &&
+        !(c->flags & CLIENT_UNIX_SOCKET) &&
         ip != NULL)
     {
         if (strcmp(ip,"127.0.0.1") && strcmp(ip,"::1")) {
@@ -843,7 +826,63 @@ static void acceptCommonHandler(int fd, int flags, char *ip) {
     }
 
     server.stat_numconnections++;
+}
+
+
+#define MAX_ACCEPTS_PER_CALL 1000
+static void acceptCommonHandler(int fd, int flags, char *ip) {
+    client *c;
+    connection *conn;
+
+    /* Admission control will happen before a client is created and connAccept()
+     * called, because we don't want to even start transport-level negotiation
+     * if rejected.
+     */
+    if (listLength(server.clients) >= server.maxclients) {
+        char *err = "-ERR max number of clients reached\r\n";
+
+        /* TODO: We'll need to differentiate TLS/Socket here and handle
+         * this specific case. We could offload this as connection abstraction
+         * as well but it's only a single, specific case!
+         */
+
+        /* That's a best effort error message, don't check write errors */
+        if (write(fd,err,strlen(err)) == -1) {
+            /* Nothing to do, Just to avoid the warning... */
+        }
+        server.stat_rejected_conn++;
+        close(fd);
+        return;
+    }
+
+    /* Create connection and client */
+    conn = connCreateAcceptedSocket(fd);
+    if ((c = createClient(conn)) == NULL) {
+        serverLog(LL_WARNING,
+            "Error registering fd event for the new client: %s (fd=%d)",
+            strerror(errno),fd);
+        connClose(conn, 0); /* May be already closed, just ignore errors */
+        return;
+    }
+
+    /* Last chance to keep flags */
     c->flags |= flags;
+
+    /* Initiate accept.
+     *
+     * Note that connAccept() is free to do two things here:
+     * 1. Call clientAcceptHandler() immediately;
+     * 2. Schedule a future call to clientAcceptHandler().
+     *
+     * Because of that, we must do nothing else afterwards.
+     */
+    if (connAccept(conn, clientAcceptHandler) == C_ERR) {
+        serverLog(LL_WARNING,
+                "Error accepting a client connection: %s (fd=%d)",
+                connGetLastError(conn), fd);
+        connClose(conn, 0);
+        return;
+    }
 }
 
 void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {

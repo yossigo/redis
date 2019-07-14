@@ -48,15 +48,38 @@
  *    depending on the implementation (for TCP they are; for TLS they aren't).
  */
 
+/* ConnectionType should hold all low level building blocks that change across
+ * different implementations.
+ *
+ * Callers shall use connXXX() functions and not be aware of this.
+ *
+ * Currently connXXX() functions are socket-only, as TLS support will be
+ * integrated we'll transition this into ConnectionType properly.
+ */
+
 ConnectionType CT_Socket;
 
-/* The connection module does not deal with listening and accepting sockets,
- * so we assume we have a socket when an incoming connection is created.
+/* When a connection is created we must know its type already, but the
+ * underlying socket may or may not exist:
  *
- * However, users are expected to still trigger a connection-handled accept
- * sequence, which may either return immediately or block and invoke a
- * callback when ready.  This allows TCP and TLS to be handled the same
- * way.
+ * - For accepted connections, it exists as we do not model the listen/accept
+ *   part; So caller calls connCreateSocket() followed by connAccept().
+ * - For outgoing connections, the socket is created by the connection module
+ *   itself; So caller calls connCreateSocket() followed by connConnect(),
+ *   which registers a connect callback that fires on connected/error state
+ *   (and after any transport level handshake was done).
+ *
+ * NOTE: An earlier version relied on connections being part of other structs
+ * and not independently allocated. This could lead to further optimizations
+ * like using container_of(), etc.  However it was discontinued in favor of
+ * this approach for these reasons:
+ *
+ * 1. In some cases conns are created/handled outside the context of the
+ * containing struct, in which case it gets a bit awkward to copy them.
+ * 2. Future implementations may wish to allocate arbitrary data for the
+ * connection.
+ * 3. The container_of() approach is anyway risky because connections may
+ * be embedded in different structs, not just client.
  */
 
 static connection *connCreateGeneric(ConnectionType *type) {
@@ -71,10 +94,31 @@ connection *connCreateSocket() {
     return connCreateGeneric(&CT_Socket);
 }
 
+connection *connCreateAcceptedSocket(int fd) {
+    connection *conn = connCreateGeneric(&CT_Socket);
+    conn->fd = fd;
+    conn->state = CONN_STATE_ACCEPTING;
+    return conn;
+}
+
+/* The connection module does not deal with listening and accepting sockets,
+ * so we assume we have a socket when an incoming connection is created.
+ *
+ * The fd supplied should therefore be associated with an already accept()ed
+ * socket.
+ *
+ * connAccept() may directly call accept_handler(), or return and call it
+ * at a later time. This behavior is a bit awkward but aims to reduce the need
+ * to wait for the next event loop, if no additional handshake is required.
+ */
+
 int connAccept(connection *conn, ConnectionCallbackFunc accept_handler) {
+    if (conn->state != CONN_STATE_ACCEPTING) return C_ERR;
     accept_handler(conn);
     return C_OK;
 }
+
+/* ------ Pure socket connections ------- */
 
 static int connSocketWrite(connection *conn, const void *data, size_t data_len) {
     return write(conn->fd, data, data_len);
@@ -301,3 +345,8 @@ int connSendTimeout(connection *conn, long long ms) {
 const char *connGetLastError(connection *conn) {
     return strerror(conn->last_errno);
 }
+
+int connGetState(connection *conn) {
+    return conn->state;
+}
+

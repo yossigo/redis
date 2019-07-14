@@ -55,9 +55,11 @@ typedef struct connection {
 } connection;
 
 connection *connCreateSocket();
-int connHandleAccepted(connection *conn, int fd, ConnectionCallbackFunc accept_handler);
+connection *connCreateAcceptedSocket(int fd);
+int connAccept(connection *conn, ConnectionCallbackFunc accept_handler);
 void connSetPrivateData(connection *conn, void *data);
 void *connGetPrivateData(connection *conn);
+int connGetState(connection *conn);
 int connIsCreated(connection *conn);
 int connBlock(connection *conn);
 int connNonBlock(connection *conn);
