@@ -91,9 +91,7 @@ client *createClient(connection *conn) {
      * This is useful since all the commands needs to be executed
      * in the context of a client. When commands are executed in other
      * contexts (for instance a Lua script) we need a non connected client. */
-    c->conn = conn;
     if (conn) {
-        c->conn = conn;
         connNonBlock(conn);
         connEnableTcpNoDelay(conn);
         if (server.tcpkeepalive)
@@ -106,6 +104,7 @@ client *createClient(connection *conn) {
     uint64_t client_id = ++server.next_client_id;
     c->id = client_id;
     c->resp = 2;
+    c->conn = conn;
     c->name = NULL;
     c->bufpos = 0;
     c->qb_pos = 0;
@@ -833,6 +832,7 @@ void clientAcceptHandler(connection *conn) {
 static void acceptCommonHandler(int fd, int flags, char *ip) {
     client *c;
     connection *conn;
+    UNUSED(ip);
 
     /* Admission control will happen before a client is created and connAccept()
      * called, because we don't want to even start transport-level negotiation
@@ -1143,8 +1143,6 @@ client *lookupClientByID(uint64_t id) {
  * error.  If handler_installed is set, it will attempt to clear the
  * write event.
  *
- * TODO: rename handler_installed.
- *
  * This function is called by threads, but always with handler_installed
  * set to 0. So when handler_installed is set to 0 the function must be
  * thread safe. */
@@ -1246,7 +1244,6 @@ int writeToClient(client *c, int handler_installed) {
 
 /* Write event handler. Just send data to the client. */
 void sendReplyToClient(connection *conn) {
-    /* TODO: should really use container_of() here */
     client *c = connGetPrivateData(conn);
     writeToClient(c,1);
 }

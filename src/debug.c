@@ -1202,7 +1202,7 @@ void logCurrentClient(void) {
     }
 }
 
-#if 0
+#if defined(HAVE_PROC_MAPS)
 
 #define MEMTEST_MAX_REGIONS 128
 
@@ -1337,7 +1337,7 @@ void sigsegvHandler(int sig, siginfo_t *info, void *secret) {
     /* Log dump of processor registers */
     logRegisters(uc);
 
-#if 0
+#if defined(HAVE_PROC_MAPS)
     /* Test memory */
     serverLogRaw(LL_WARNING|LL_RAW, "\n------ FAST MEMORY TEST ------\n");
     bioKillThreads();

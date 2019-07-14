@@ -593,7 +593,6 @@ clusterLink *createClusterLink(clusterNode *node) {
     link->rcvbuf = sdsempty();
     link->node = node;
     link->conn = NULL;
-
     return link;
 }
 
@@ -601,9 +600,10 @@ clusterLink *createClusterLink(clusterNode *node) {
  * This function will just make sure that the original node associated
  * with this link will have the 'link' field set to NULL. */
 void freeClusterLink(clusterLink *link) {
-    connClose(link->conn, 0);
-    link->conn = NULL;
-
+    if (link->conn) {
+        connClose(link->conn, 0);
+        link->conn = NULL;
+    }
     sdsfree(link->sndbuf);
     sdsfree(link->rcvbuf);
     if (link->node)
@@ -653,7 +653,7 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         if (cfd == ANET_ERR) {
             if (errno != EWOULDBLOCK)
                 serverLog(LL_VERBOSE,
-                    "Error accepting cluster node socket: %s", server.neterr);
+                    "Error accepting cluster node: %s", server.neterr);
             return;
         }
 
@@ -2161,10 +2161,23 @@ void clusterWriteHandler(connection *conn) {
         connSetWriteHandler(link->conn, NULL);
 }
 
+/* A connect handler that gets called when a connection to another node
+ * gets established.
+ */
 void clusterLinkConnectHandler(connection *conn) {
     clusterLink *link = connGetPrivateData(conn);
     clusterNode *node = link->node;
 
+    /* Check if connection succeeded */
+    if (connGetState(conn) != CONN_STATE_CONNECTED) {
+        serverLog(LL_VERBOSE, "Connection with Node %.40s at %s:%d failed: %s",
+                node->name, node->ip, node->cport,
+                connGetLastError(conn));
+        freeClusterLink(link);
+        return;
+    }
+
+    /* Register a read handler from now on */
     connSetReadHandler(conn, clusterReadHandler);
 
     /* Queue a PING in the new connection ASAP: this is crucial
@@ -4990,6 +5003,7 @@ typedef struct migrateCachedSocket {
  * should be called so that the connection will be created from scratch
  * the next time. */
 migrateCachedSocket* migrateGetSocket(client *c, robj *host, robj *port, long timeout) {
+    connection *conn;
     sds name = sdsempty();
     migrateCachedSocket *cs;
 
@@ -5015,20 +5029,20 @@ migrateCachedSocket* migrateGetSocket(client *c, robj *host, robj *port, long ti
     }
 
     /* Create the socket */
-
-    /* Add to the cache and return it to the caller. */
-    cs = zmalloc(sizeof(*cs));
-    cs->conn = connCreateSocket();
-    if (connBlockingConnect(cs->conn, c->argv[1]->ptr, atoi(c->argv[2]->ptr), timeout)
+    conn = connCreateSocket();
+    if (connBlockingConnect(conn, c->argv[1]->ptr, atoi(c->argv[2]->ptr), timeout)
             != C_OK) {
         addReplySds(c,
             sdsnew("-IOERR error or timeout connecting to the client\r\n"));
-        connClose(cs->conn, 0);
-        zfree(cs);
+        connClose(conn, 0);
         sdsfree(name);
         return NULL;
     }
-    connEnableTcpNoDelay(cs->conn);
+    connEnableTcpNoDelay(conn);
+
+    /* Add to the cache and return it to the caller. */
+    cs = zmalloc(sizeof(*cs));
+    cs->conn = conn;
 
     cs->last_dbid = -1;
     cs->last_use_time = server.unixtime;
