@@ -29,29 +29,72 @@
 
 #include "server.h"
 
-int connTcpWrite(connection *conn, const void *data, size_t data_len) {
+/* The connections module provides a lean abstraction of network connections
+ * to avoid direct socket and async event management across the Redis code base.
+ *
+ * It does NOT provide advanced connection features commonly found in similar
+ * libraries such as complete in/out buffer management, throttling, etc. These
+ * functions remain in networking.c.
+ *
+ * The primary goal is to allow transparent handling of TCP and TLS based
+ * connections. To do so, connections have the following properties:
+ *
+ * 1. A connection may live before its corresponding socket exists.  This
+ *    allows various context and configuration setting to be handled before
+ *    establishing the actual connection.
+ * 2. The caller may register/unregister logical read/write handlers to be
+ *    called when the connection has data to read from/can accept writes.
+ *    These logical handlers may or may not correspond to actual AE events,
+ *    depending on the implementation (for TCP they are; for TLS they aren't).
+ */
+
+ConnectionType CT_Socket;
+
+/* The connection module does not deal with listening and accepting sockets,
+ * so we assume we have a socket when an incoming connection is created.
+ *
+ * However, users are expected to still trigger a connection-handled accept
+ * sequence, which may either return immediately or block and invoke a
+ * callback when ready.  This allows TCP and TLS to be handled the same
+ * way.
+ */
+
+static connection *connCreateGeneric(ConnectionType *type) {
+    connection *conn = zcalloc(sizeof(connection));
+    conn->type = type;
+    conn->fd = -1;
+
+    return conn;
+}
+
+connection *connCreateSocket() {
+    return connCreateGeneric(&CT_Socket);
+}
+
+int connAccept(connection *conn, ConnectionCallbackFunc accept_handler) {
+    accept_handler(conn);
+    return C_OK;
+}
+
+static int connSocketWrite(connection *conn, const void *data, size_t data_len) {
     return write(conn->fd, data, data_len);
 }
 
-int connTcpRead(connection *conn, void *buf, size_t buf_len) {
+static int connSocketRead(connection *conn, void *buf, size_t buf_len) {
     return read(conn->fd, buf, buf_len);
 }
 
-connection_type ConnectionTypeTCP = {
-    .write = connTcpWrite,
-    .read = connTcpRead
+ConnectionType CT_Socket = {
+    .write = connSocketWrite,
+    .read = connSocketRead
 };
 
-int connIsInitialized(connection *conn) {
-    return conn->fd >= 0;
-}
-
 int connWrite(connection *conn, const void *data, size_t data_len) {
-    return conn->t->write(conn, data, data_len);
+    return conn->type->write(conn, data, data_len);
 }
 
 int connRead(connection *conn, void *buf, size_t buf_len) {
-    return conn->t->read(conn, buf, buf_len);
+    return conn->type->read(conn, buf, buf_len);
 }
 
 int connClose(connection *conn, int do_shutdown) {
@@ -62,6 +105,8 @@ int connClose(connection *conn, int do_shutdown) {
     aeDeleteFileEvent(server.el,conn->fd,AE_WRITABLE);
     close(conn->fd);
     conn->fd = -1;
+
+    zfree(conn);
 
     return 0;
 }
@@ -134,12 +179,12 @@ int connHasWriteHandler(connection *conn) {
     return conn->write_handler != NULL;
 }
 
-void connInitialize(connection *conn, connection_type *type, int fd, void *privdata) {
-    conn->privdata = privdata;
-    conn->write_handler = NULL;
-    conn->read_handler = NULL;
-    conn->t = type;
-    conn->fd = fd;
+int connHasReadHandler(connection *conn) {
+    return conn->read_handler != NULL;
+}
+
+int connGetFd(connection *conn) {
+    return conn->fd;
 }
 
 void connClone(connection *target, const connection *source) {
@@ -191,8 +236,12 @@ int connGetSocketError(connection *conn) {
     return sockerr;
 }
 
-void connSetPrivData(connection *conn, void *privdata) {
-    conn->privdata = privdata;
+void connSetPrivateData(connection *conn, void *data) {
+    conn->private_data = data;
+}
+
+void *connGetPrivateData(connection *conn) {
+    return conn->private_data;
 }
 
 ssize_t connSyncWrite(connection *conn, char *ptr, ssize_t size, long long timeout) {
@@ -210,4 +259,45 @@ ssize_t connSyncReadLine(connection *conn, char *ptr, ssize_t size, long long ti
 const char *connGetErrorString(connection *conn) {
     if (conn->state == CONN_STATE_ERROR) return strerror(conn->last_errno);
     return NULL;
+}
+
+int connPeerToString(connection *conn, char *ip, size_t ip_len, int *port) {
+    return anetPeerToString(conn ? conn->fd : -1, ip, ip_len, port);
+}
+
+int connFormatPeer(connection *conn, char *buf, size_t buf_len) {
+    return anetFormatPeer(conn ? conn->fd : -1, buf, buf_len);
+}
+
+int connBlock(connection *conn) {
+    if (conn->fd == -1) return C_ERR;
+    return anetBlock(NULL, conn->fd);
+}
+
+int connNonBlock(connection *conn) {
+    if (conn->fd == -1) return C_ERR;
+    return anetNonBlock(NULL, conn->fd);
+}
+
+int connEnableTcpNoDelay(connection *conn) {
+    if (conn->fd == -1) return C_ERR;
+    return anetEnableTcpNoDelay(NULL, conn->fd);
+}
+
+int connDisableTcpNoDelay(connection *conn) {
+    if (conn->fd == -1) return C_ERR;
+    return anetDisableTcpNoDelay(NULL, conn->fd);
+}
+
+int connKeepAlive(connection *conn, int interval) {
+    if (conn->fd == -1) return C_ERR;
+    return anetKeepAlive(NULL, conn->fd, interval);
+}
+
+int connSendTimeout(connection *conn, long long ms) {
+    return anetSendTimeout(NULL, conn->fd, ms);
+}
+
+const char *connGetLastError(connection *conn) {
+    return strerror(conn->last_errno);
 }

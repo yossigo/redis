@@ -57,7 +57,7 @@ char *replicationGetSlaveName(client *c) {
     ip[0] = '\0';
     buf[0] = '\0';
     if (c->slave_ip[0] != '\0' ||
-        anetPeerToString(c->conn.fd,ip,sizeof(ip),NULL) != -1)
+        connPeerToString(c->conn,ip,sizeof(ip),NULL) != -1)
     {
         /* Note that the 'ip' buffer is always larger than 'c->slave_ip' */
         if (c->slave_ip[0] != '\0') memcpy(ip,c->slave_ip,sizeof(c->slave_ip));
@@ -432,7 +432,7 @@ int replicationSetupSlaveForFullResync(client *slave, long long offset) {
     if (!(slave->flags & CLIENT_PRE_PSYNC)) {
         buflen = snprintf(buf,sizeof(buf),"+FULLRESYNC %s %lld\r\n",
                           server.replid,offset);
-        if (connWrite(&slave->conn,buf,buflen) != buflen) {
+        if (connWrite(slave->conn,buf,buflen) != buflen) {
             freeClientAsync(slave);
             return C_ERR;
         }
@@ -519,7 +519,7 @@ int masterTryPartialResynchronization(client *c) {
     } else {
         buflen = snprintf(buf,sizeof(buf),"+CONTINUE\r\n");
     }
-    if (connWrite(&c->conn,buf,buflen) != buflen) {
+    if (connWrite(c->conn,buf,buflen) != buflen) {
         freeClientAsync(c);
         return C_OK;
     }
@@ -685,7 +685,7 @@ void syncCommand(client *c) {
      * paths will change the state if we handle the slave differently. */
     c->replstate = SLAVE_STATE_WAIT_BGSAVE_START;
     if (server.repl_disable_tcp_nodelay)
-        anetDisableTcpNoDelay(NULL, c->conn.fd); /* Non critical if it fails. */
+        connDisableTcpNoDelay(c->conn); /* Non critical if it fails. */
     c->repldbfd = -1;
     c->flags |= CLIENT_SLAVE;
     listAddNodeTail(server.slaves,c);
@@ -858,7 +858,7 @@ void putSlaveOnline(client *slave) {
     slave->replstate = SLAVE_STATE_ONLINE;
     slave->repl_put_online_on_ack = 0;
     slave->repl_ack_time = server.unixtime; /* Prevent false timeout. */
-    if (connSetWriteHandler(&slave->conn, sendReplyToClient) == C_ERR) {
+    if (connSetWriteHandler(slave->conn, sendReplyToClient) == C_ERR) {
         serverLog(LL_WARNING,"Unable to register writable event for replica bulk transfer: %s", strerror(errno));
         freeClient(slave);
         return;
@@ -869,7 +869,7 @@ void putSlaveOnline(client *slave) {
 }
 
 void sendBulkToSlave(connection *conn) {
-    client *slave = conn->privdata;
+    client *slave = connGetPrivateData(conn);
     char buf[PROTO_IOBUF_LEN];
     ssize_t nwritten, buflen;
 
@@ -917,7 +917,7 @@ void sendBulkToSlave(connection *conn) {
     if (slave->repldboff == slave->repldbsize) {
         close(slave->repldbfd);
         slave->repldbfd = -1;
-        connSetWriteHandler(&slave->conn,NULL);
+        connSetWriteHandler(slave->conn,NULL);
         putSlaveOnline(slave);
     }
 }
@@ -989,8 +989,8 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type) {
                     (unsigned long long) slave->repldbsize);
 
                 /* TODO combine two sets into one */
-                connSetWriteHandler(&slave->conn,NULL);
-                if (connSetWriteHandler(&slave->conn,sendBulkToSlave) == C_ERR) {
+                connSetWriteHandler(slave->conn,NULL);
+                if (connSetWriteHandler(slave->conn,sendBulkToSlave) == C_ERR) {
                     freeClient(slave);
                     continue;
                 }
@@ -1059,7 +1059,7 @@ void replicationSendNewlineToMaster(void) {
     if (time(NULL) != newline_sent) {
         newline_sent = time(NULL);
         /* Pinging back in this stage is best-effort. */
-        connWrite(&server.repl_transfer_s, "\n", 1);
+        connWrite(server.repl_transfer_s, "\n", 1);
     }
 }
 
@@ -1074,20 +1074,9 @@ void replicationEmptyDbCallback(void *privdata) {
  * performed, this function materializes the master client we store
  * at server.master, starting from the specified file descriptor. */
 void replicationCreateMasterClient(connection *conn, int dbid) {
-    server.master = createClient(conn ? conn->fd : -1);
-    if (conn) {
-        /* TODO: Move this to createClient which should take a conn
-         * rather than fd.
-         */
-        anetNonBlock(NULL,conn->fd);
-        anetEnableTcpNoDelay(NULL,conn->fd);
-
-        connClone(&server.master->conn, conn);
-        connSetPrivData(&server.master->conn, server.master);
-        connSetReadHandler(&server.master->conn, readQueryFromClient);
-    } else {
-        connInitialize(&server.master->conn, &ConnectionTypeTCP, -1, &server.master);
-    }
+    server.master = createClient(conn);
+    if (conn)
+        connSetReadHandler(server.master->conn, readQueryFromClient);
     server.master->flags |= CLIENT_MASTER;
     server.master->authenticated = 1;
     server.master->reploff = server.master_initial_offset;
@@ -1294,7 +1283,7 @@ void readSyncBulkPayload(connection *conn) {
          * handler, otherwise it will get called recursively since
          * rdbLoad() will call the event loop to process events from time to
          * time for non blocking loading. */
-        connSetReadHandler(&server.repl_transfer_s,NULL);
+        connSetReadHandler(server.repl_transfer_s,NULL);
         serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: Loading DB in memory");
         rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
         if (rdbLoad(server.rdb_filename,&rsi) != C_OK) {
@@ -1308,7 +1297,7 @@ void readSyncBulkPayload(connection *conn) {
         /* Final setup of the connected slave <- master link */
         zfree(server.repl_transfer_tmpfile);
         close(server.repl_transfer_fd);
-        replicationCreateMasterClient(&server.repl_transfer_s,rsi.repl_stream_db);
+        replicationCreateMasterClient(server.repl_transfer_s,rsi.repl_stream_db);
         server.repl_state = REPL_STATE_CONNECTED;
         server.repl_down_since = 0;
         /* After a full resynchroniziation we use the replication ID and
@@ -1881,6 +1870,7 @@ void syncWithMaster(connection *conn) {
 error:
     if (dfd != -1) close(dfd);
     connClose(conn, 0);
+    server.repl_transfer_s = NULL;
     server.repl_state = REPL_STATE_CONNECT;
     return;
 
@@ -1891,12 +1881,13 @@ write_error: /* Handle sendSynchronousCommand(SYNC_CMD_WRITE) errors. */
 }
 
 int connectWithMaster(void) {
-    connInitialize(&server.repl_transfer_s, &ConnectionTypeTCP, -1, NULL);
-    if (connConnect(&server.repl_transfer_s, server.masterhost, server.masterport,
+    server.repl_transfer_s = connCreateSocket();
+    if (connConnect(server.repl_transfer_s, server.masterhost, server.masterport,
                 NET_FIRST_BIND_ADDR, syncWithMaster) == C_ERR) {
         serverLog(LL_WARNING,"Unable to connect to MASTER: %s",
-            strerror(server.repl_transfer_s.last_errno));
-        connClose(&server.repl_transfer_s, 0);
+                connGetLastError(server.repl_transfer_s));
+        connClose(server.repl_transfer_s, 0);
+        server.repl_transfer_s = NULL;
         return C_ERR;
     }
 
@@ -1911,7 +1902,8 @@ int connectWithMaster(void) {
  * Never call this function directly, use cancelReplicationHandshake() instead.
  */
 void undoConnectWithMaster(void) {
-    connClose(&server.repl_transfer_s, 0);
+    connClose(server.repl_transfer_s, 0);
+    server.repl_transfer_s = NULL;
 }
 
 /* Abort the async download of the bulk dataset while SYNC-ing with master.
@@ -2089,7 +2081,7 @@ void roleCommand(client *c) {
             char ip[NET_IP_STR_LEN], *slaveip = slave->slave_ip;
 
             if (slaveip[0] == '\0') {
-                if (anetPeerToString(slave->conn.fd,ip,sizeof(ip),NULL) == -1)
+                if (connPeerToString(slave->conn,ip,sizeof(ip),NULL) == -1)
                     continue;
                 slaveip = ip;
             }
@@ -2243,8 +2235,8 @@ void replicationDiscardCachedMaster(void) {
 void replicationResurrectCachedMaster(connection *conn) {
     server.master = server.cached_master;
     server.cached_master = NULL;
-    connClone(&server.master->conn, conn);
-    connSetPrivData(&server.master->conn, server.master);
+    server.master->conn = conn;
+    connSetPrivateData(server.master->conn, server.master);
     server.master->flags &= ~(CLIENT_CLOSE_AFTER_REPLY|CLIENT_CLOSE_ASAP);
     server.master->authenticated = 1;
     server.master->lastinteraction = server.unixtime;
@@ -2253,7 +2245,7 @@ void replicationResurrectCachedMaster(connection *conn) {
 
     /* Re-add to the list of clients. */
     linkClient(server.master);
-    if (connSetReadHandler(&server.master->conn, readQueryFromClient)) {
+    if (connSetReadHandler(server.master->conn, readQueryFromClient)) {
         serverLog(LL_WARNING,"Error resurrecting the cached master, impossible to add the readable handler: %s", strerror(errno));
         freeClientAsync(server.master); /* Close ASAP. */
     }
@@ -2261,7 +2253,7 @@ void replicationResurrectCachedMaster(connection *conn) {
     /* We may also need to install the write handler as well if there is
      * pending data in the write buffers. */
     if (clientHasPendingReplies(server.master)) {
-        if (connSetWriteHandler(&server.master->conn, sendReplyToClient)) {
+        if (connSetWriteHandler(server.master->conn, sendReplyToClient)) {
             serverLog(LL_WARNING,"Error resurrecting the cached master, impossible to add the writable handler: %s", strerror(errno));
             freeClientAsync(server.master); /* Close ASAP. */
         }
@@ -2631,7 +2623,7 @@ void replicationCron(void) {
              server.rdb_child_type != RDB_CHILD_TYPE_SOCKET));
 
         if (is_presync) {
-            connWrite(&slave->conn, "\n", 1);
+            connWrite(slave->conn, "\n", 1);
         }
     }
 

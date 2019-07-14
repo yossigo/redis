@@ -30,14 +30,12 @@
 
 struct connection;
 
-typedef struct connection_type {
+typedef struct ConnectionType {
     int (*connect)(struct connection *conn, const char *addr, int port, const char *source_addr);
     int (*write)(struct connection *conn, const void *data, size_t data_len); 
     int (*read)(struct connection *conn, void *buf, size_t buf_len); 
     int (*close)(struct connection *conn, int shutdown);
-} connection_type;
-
-extern connection_type ConnectionTypeTCP;
+} ConnectionType;
 
 typedef void (*ConnectionCallbackFunc)(struct connection *conn);
 
@@ -47,17 +45,35 @@ typedef void (*ConnectionCallbackFunc)(struct connection *conn);
 #define CONN_STATE_ERROR        3
 
 typedef struct connection {
-    connection_type *t;
+    ConnectionType *type;
     int state;
     int last_errno;
-    void *privdata;
+    void *private_data;
     ConnectionCallbackFunc write_handler;
     ConnectionCallbackFunc read_handler;
     int fd;
 } connection;
 
-int connIsInitialized(connection *conn);
-void connInitialize(connection *conn, connection_type *type, int fd, void *privdata);
+connection *connCreateSocket();
+int connHandleAccepted(connection *conn, int fd, ConnectionCallbackFunc accept_handler);
+void connSetPrivateData(connection *conn, void *data);
+void *connGetPrivateData(connection *conn);
+int connIsCreated(connection *conn);
+int connBlock(connection *conn);
+int connNonBlock(connection *conn);
+int connEnableTcpNoDelay(connection *conn);
+int connDisableTcpNoDelay(connection *conn);
+int connKeepAlive(connection *conn, int interval);
+int connSendTimeout(connection *conn, long long ms);
+
+int connPeerToString(connection *conn, char *ip, size_t ip_len, int *port);
+int connFormatPeer(connection *conn, char *buf, size_t buf_len);
+int connGetFd(connection *conn);
+
+const char *connGetLastError(connection *conn);
+
+/**/
+
 int connConnect(connection *conn, const char *addr, int port, const char *src_addr,
         ConnectionCallbackFunc connect_handler);
 int connBlockingConnect(connection *conn, const char *addr, int port, long long timeout);
@@ -66,6 +82,7 @@ void connClone(connection *target, const connection *source);
 int connSetWriteHandler(connection *conn, ConnectionCallbackFunc func);
 int connSetReadHandler(connection *conn, ConnectionCallbackFunc func);
 int connHasWriteHandler(connection *conn);
+int connHasReadHandler(connection *conn);
 int connWrite(connection *conn, const void *data, size_t data_len);
 int connRead(connection *conn, void *buf, size_t buf_len);
 int connClose(connection *conn, int shutdown);

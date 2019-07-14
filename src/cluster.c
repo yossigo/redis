@@ -592,7 +592,7 @@ clusterLink *createClusterLink(clusterNode *node) {
     link->sndbuf = sdsempty();
     link->rcvbuf = sdsempty();
     link->node = node;
-    connInitialize(&link->conn, &ConnectionTypeTCP, -1, link);
+    link->conn = NULL;
 
     return link;
 }
@@ -601,7 +601,9 @@ clusterLink *createClusterLink(clusterNode *node) {
  * This function will just make sure that the original node associated
  * with this link will have the 'link' field set to NULL. */
 void freeClusterLink(clusterLink *link) {
-    connClose(&link->conn, 0);
+    connClose(link->conn, 0);
+    link->conn = NULL;
+
     sdsfree(link->sndbuf);
     sdsfree(link->rcvbuf);
     if (link->node)
@@ -642,8 +644,9 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
          * which node is, but the right node is references once we know the
          * node identity. */
         link = createClusterLink(NULL);
-        link->conn.fd = cfd;
-        connSetReadHandler(&link->conn, clusterReadHandler);
+        connSetPrivateData(link->conn, link);
+        link->conn->fd = cfd;   /* TODO: Use accept */
+        connSetReadHandler(link->conn, clusterReadHandler);
     }
 }
 
@@ -1444,7 +1447,7 @@ void nodeIp2String(char *buf, clusterLink *link, char *announced_ip) {
         memcpy(buf,announced_ip,NET_IP_STR_LEN);
         buf[NET_IP_STR_LEN-1] = '\0'; /* We are not sure the input is sane. */
     } else {
-        anetPeerToString(link->conn.fd, buf, NET_IP_STR_LEN, NULL);
+        connPeerToString(link->conn, buf, NET_IP_STR_LEN, NULL);
     }
 }
 
@@ -1748,7 +1751,7 @@ int clusterProcessPacket(clusterLink *link) {
         {
             char ip[NET_IP_STR_LEN];
 
-            if (anetSockName(link->conn.fd,ip,sizeof(ip),NULL) != -1 &&
+            if (anetSockName(connGetFd(link->conn),ip,sizeof(ip),NULL) != -1 &&
                 strcmp(ip,myself->ip))
             {
                 memcpy(myself->ip,ip,NET_IP_STR_LEN);
@@ -2116,7 +2119,7 @@ void handleLinkIOError(clusterLink *link) {
  * consumed by write(). We don't try to optimize this for speed too much
  * as this is a very low traffic channel. */
 void clusterWriteHandler(connection *conn) {
-    clusterLink *link = (clusterLink*) conn->privdata;
+    clusterLink *link = connGetPrivateData(conn);
     ssize_t nwritten;
 
     nwritten = connWrite(conn, link->sndbuf, sdslen(link->sndbuf));
@@ -2128,11 +2131,11 @@ void clusterWriteHandler(connection *conn) {
     }
     sdsrange(link->sndbuf,nwritten,-1);
     if (sdslen(link->sndbuf) == 0)
-        connSetWriteHandler(&link->conn, NULL);
+        connSetWriteHandler(link->conn, NULL);
 }
 
 void clusterLinkConnectHandler(connection *conn) {
-    clusterLink *link = (clusterLink *) conn->privdata;
+    clusterLink *link = connGetPrivateData(conn);
     clusterNode *node = link->node;
 
     connSetReadHandler(conn, clusterReadHandler);
@@ -2170,7 +2173,7 @@ void clusterReadHandler(connection *conn) {
     char buf[sizeof(clusterMsg)];
     ssize_t nread;
     clusterMsg *hdr;
-    clusterLink *link = (clusterLink*) conn->privdata;
+    clusterLink *link = connGetPrivateData(conn);
     unsigned int readlen, rcvbuflen;
 
     while(1) { /* Read as long as there is data to read. */
@@ -2234,7 +2237,7 @@ void clusterReadHandler(connection *conn) {
  * from event handlers that will do stuff with the same link later. */
 void clusterSendMessage(clusterLink *link, unsigned char *msg, size_t msglen) {
     if (sdslen(link->sndbuf) == 0 && msglen != 0)
-        connSetWriteHandler(&link->conn, clusterWriteHandler); /* TODO: AE_BARRIER */
+        connSetWriteHandler(link->conn, clusterWriteHandler); /* TODO: AE_BARRIER */
 
     link->sndbuf = sdscatlen(link->sndbuf, msg, msglen);
 
@@ -3409,7 +3412,7 @@ void clusterCron(void) {
         if (node->link == NULL) {
             clusterLink *link = createClusterLink(node);
 
-            if (connConnect(&link->conn, node->ip, node->cport, NET_FIRST_BIND_ADDR,
+            if (connConnect(link->conn, node->ip, node->cport, NET_FIRST_BIND_ADDR,
                         clusterLinkConnectHandler) == -1) {
                 /* We got a synchronous error from connect before
                  * clusterSendPing() had a chance to be called.
@@ -4942,7 +4945,7 @@ void restoreCommand(client *c) {
 #define MIGRATE_SOCKET_CACHE_TTL 10 /* close cached sockets after 10 sec. */
 
 typedef struct migrateCachedSocket {
-    connection conn;
+    connection *conn;
     long last_dbid;
     time_t last_use_time;
 } migrateCachedSocket;
@@ -4978,7 +4981,7 @@ migrateCachedSocket* migrateGetSocket(client *c, robj *host, robj *port, long ti
         /* Too many items, drop one at random. */
         dictEntry *de = dictGetRandomKey(server.migrate_cached_sockets);
         cs = dictGetVal(de);
-        connClose(&cs->conn, 0);
+        connClose(cs->conn, 0);
         zfree(cs);
         dictDelete(server.migrate_cached_sockets,dictGetKey(de));
     }
@@ -4987,17 +4990,17 @@ migrateCachedSocket* migrateGetSocket(client *c, robj *host, robj *port, long ti
 
     /* Add to the cache and return it to the caller. */
     cs = zmalloc(sizeof(*cs));
-    connInitialize(&cs->conn, &ConnectionTypeTCP, -1, cs);
-    if (connBlockingConnect(&cs->conn, c->argv[1]->ptr, atoi(c->argv[2]->ptr), timeout)
+    cs->conn = connCreateSocket();
+    if (connBlockingConnect(cs->conn, c->argv[1]->ptr, atoi(c->argv[2]->ptr), timeout)
             != C_OK) {
         addReplySds(c,
             sdsnew("-IOERR error or timeout connecting to the client\r\n"));
-        connClose(&cs->conn, 0);
+        connClose(cs->conn, 0);
         zfree(cs);
         sdsfree(name);
         return NULL;
     }
-    anetEnableTcpNoDelay(server.neterr,cs->conn.fd);
+    connEnableTcpNoDelay(cs->conn);
 
     cs->last_dbid = -1;
     cs->last_use_time = server.unixtime;
@@ -5019,7 +5022,7 @@ void migrateCloseSocket(robj *host, robj *port) {
         return;
     }
 
-    connClose(&cs->conn, 0);
+    connClose(cs->conn, 0);
     zfree(cs);
     dictDelete(server.migrate_cached_sockets,name);
     sdsfree(name);
@@ -5033,7 +5036,7 @@ void migrateCloseTimedoutSockets(void) {
         migrateCachedSocket *cs = dictGetVal(de);
 
         if ((server.unixtime - cs->last_use_time) > MIGRATE_SOCKET_CACHE_TTL) {
-            connClose(&cs->conn, 0);
+            connClose(cs->conn, 0);
             zfree(cs);
             dictDelete(server.migrate_cached_sockets,dictGetKey(de));
         }
@@ -5215,7 +5218,7 @@ try_again:
 
         while ((towrite = sdslen(buf)-pos) > 0) {
             towrite = (towrite > (64*1024) ? (64*1024) : towrite);
-            nwritten = connSyncWrite(&cs->conn,buf+pos,towrite,timeout);
+            nwritten = connSyncWrite(cs->conn,buf+pos,towrite,timeout);
             if (nwritten != (signed)towrite) {
                 write_error = 1;
                 goto socket_err;
@@ -5229,11 +5232,11 @@ try_again:
     char buf2[1024]; /* Restore reply. */
 
     /* Read the AUTH reply if needed. */
-    if (password && connSyncReadLine(&cs->conn, buf0, sizeof(buf0), timeout) <= 0)
+    if (password && connSyncReadLine(cs->conn, buf0, sizeof(buf0), timeout) <= 0)
         goto socket_err;
 
     /* Read the SELECT reply if needed. */
-    if (select && connSyncReadLine(&cs->conn, buf1, sizeof(buf1), timeout) <= 0)
+    if (select && connSyncReadLine(cs->conn, buf1, sizeof(buf1), timeout) <= 0)
         goto socket_err;
 
     /* Read the RESTORE replies. */
@@ -5248,7 +5251,7 @@ try_again:
     if (!copy) newargv = zmalloc(sizeof(robj*)*(num_keys+1));
 
     for (j = 0; j < num_keys; j++) {
-        if (connSyncReadLine(&cs->conn, buf2, sizeof(buf2), timeout) <= 0) {
+        if (connSyncReadLine(cs->conn, buf2, sizeof(buf2), timeout) <= 0) {
             socket_error = 1;
             break;
         }

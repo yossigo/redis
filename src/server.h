@@ -66,6 +66,7 @@ typedef long long mstime_t; /* millisecond time type. */
 #include "quicklist.h"  /* Lists are encoded as linked lists of
                            N-elements flat arrays */
 #include "rax.h"     /* Radix tree */
+#include "connection.h" /* Connection abstraction */
 
 /* Following includes allow test functions to be called from Redis main() */
 #include "zipmap.h"
@@ -785,58 +786,11 @@ typedef struct user {
                         the flag ALLKEYS is set in the user. */
 } user;
 
-struct connection;
-
-typedef struct connection_type {
-    int (*connect)(struct connection *conn, const char *addr, int port, const char *source_addr);
-    int (*write)(struct connection *conn, const void *data, size_t data_len); 
-    int (*read)(struct connection *conn, void *buf, size_t buf_len); 
-    int (*close)(struct connection *conn, int shutdown);
-} connection_type;
-
-extern connection_type ConnectionTypeTCP;
-
-typedef void (*ConnectionCallbackFunc)(struct connection *conn);
-
-#define CONN_STATE_CONNECTING   1
-#define CONN_STATE_CONNECTED    2
-#define CONN_STATE_ERROR        3
-
-typedef struct connection {
-    connection_type *t;
-    int state;
-    int last_errno;
-    void *privdata;
-    ConnectionCallbackFunc write_handler;
-    ConnectionCallbackFunc read_handler;
-    int fd;
-} connection;
-
-int connIsInitialized(connection *conn);
-void connInitialize(connection *conn, connection_type *type, int fd, void *privdata);
-int connConnect(connection *conn, const char *addr, int port, const char *src_addr,
-        ConnectionCallbackFunc connect_handler);
-int connBlockingConnect(connection *conn, const char *addr, int port, long long timeout);
-
-void connClone(connection *target, const connection *source);
-int connSetWriteHandler(connection *conn, ConnectionCallbackFunc func);
-int connSetReadHandler(connection *conn, ConnectionCallbackFunc func);
-int connHasWriteHandler(connection *conn);
-int connWrite(connection *conn, const void *data, size_t data_len);
-int connRead(connection *conn, void *buf, size_t buf_len);
-int connClose(connection *conn, int shutdown);
-int connGetSocketError(connection *conn);
-void connSetPrivData(connection *conn, void *privdata);
-
-ssize_t connSyncWrite(connection *conn, char *ptr, ssize_t size, long long timeout);
-ssize_t connSyncRead(connection *conn, char *ptr, ssize_t size, long long timeout);
-ssize_t connSyncReadLine(connection *conn, char *ptr, ssize_t size, long long timeout);
-
 /* With multiplexing we need to take per-client state.
  * Clients are taken in a linked list. */
 typedef struct client {
     uint64_t id;            /* Client incremental unique ID. */
-    connection conn;
+    connection *conn;
     int resp;               /* RESP protocol version. Can be 2 or 3. */
     redisDb *db;            /* Pointer to currently SELECTed DB. */
     robj *name;             /* As set by CLIENT SETNAME. */
@@ -1295,7 +1249,7 @@ struct redisServer {
     off_t repl_transfer_size; /* Size of RDB to read from master during sync. */
     off_t repl_transfer_read; /* Amount of RDB read from master during sync. */
     off_t repl_transfer_last_fsync_off; /* Offset when we fsync-ed last time. */
-    connection repl_transfer_s;     /* Slave -> Master SYNC connection */
+    connection *repl_transfer_s;     /* Slave -> Master SYNC connection */
     int repl_transfer_fd;    /* Slave -> Master SYNC temp file descriptor */
     char *repl_transfer_tmpfile; /* Slave-> master SYNC temp file name */
     time_t repl_transfer_lastio; /* Unix time of the latest read, for timeout */
@@ -1557,7 +1511,7 @@ size_t redisPopcount(void *s, long count);
 void redisSetProcTitle(char *title);
 
 /* networking.c -- Networking and Client related operations */
-client *createClient(int fd);
+client *createClient(connection *conn);
 void closeTimedoutClients(void);
 void freeClient(client *c);
 void freeClientAsync(client *c);

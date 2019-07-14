@@ -703,7 +703,7 @@ void _serverAssertPrintClientInfo(const client *c) {
     bugReportStart();
     serverLog(LL_WARNING,"=== ASSERTION FAILED CLIENT CONTEXT ===");
     serverLog(LL_WARNING,"client->flags = %d", c->flags);
-    serverLog(LL_WARNING,"client->fd = %d", c->conn.fd);
+    serverLog(LL_WARNING,"client->conn->fd = %d", connGetFd(c->conn));
     serverLog(LL_WARNING,"client->argc = %d", c->argc);
     for (j=0; j < c->argc; j++) {
         char buf[128];
