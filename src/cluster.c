@@ -2131,6 +2131,38 @@ void clusterWriteHandler(connection *conn) {
         connSetWriteHandler(&link->conn, NULL);
 }
 
+void clusterLinkConnectHandler(connection *conn) {
+    clusterLink *link = (clusterLink *) conn->privdata;
+    clusterNode *node = link->node;
+
+    connSetReadHandler(conn, clusterReadHandler);
+
+    /* Queue a PING in the new connection ASAP: this is crucial
+     * to avoid false positives in failure detection.
+     *
+     * If the node is flagged as MEET, we send a MEET message instead
+     * of a PING one, to force the receiver to add us in its node
+     * table. */
+    mstime_t old_ping_sent = node->ping_sent;
+    clusterSendPing(link, node->flags & CLUSTER_NODE_MEET ?
+            CLUSTERMSG_TYPE_MEET : CLUSTERMSG_TYPE_PING);
+    if (old_ping_sent) {
+        /* If there was an active ping before the link was
+         * disconnected, we want to restore the ping time, otherwise
+         * replaced by the clusterSendPing() call. */
+        node->ping_sent = old_ping_sent;
+    }
+    /* We can clear the flag after the first packet is sent.
+     * If we'll never receive a PONG, we'll never send new packets
+     * to this node. Instead after the PONG is received and we
+     * are no longer in meet/handshake status, we want to send
+     * normal PING packets. */
+    node->flags &= ~CLUSTER_NODE_MEET;
+
+    serverLog(LL_DEBUG,"Connecting with Node %.40s at %s:%d",
+            node->name, node->ip, node->cport);
+}
+
 /* Read data. Try to read the first field of the header first to check the
  * full length of the packet. When a whole packet is in memory this function
  * will call the function to process the packet. And so forth. */
@@ -3378,7 +3410,7 @@ void clusterCron(void) {
             clusterLink *link = createClusterLink(node);
 
             if (connConnect(&link->conn, node->ip, node->cport, NET_FIRST_BIND_ADDR,
-                        clusterReadHandler) == -1) {
+                        clusterLinkConnectHandler) == -1) {
                 /* We got a synchronous error from connect before
                  * clusterSendPing() had a chance to be called.
                  * If node->ping_sent is zero, failure detection can't work,
