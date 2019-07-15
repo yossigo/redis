@@ -1604,7 +1604,7 @@ int slaveTryPartialResynchronization(connection *conn, int read_reply) {
 void syncWithMaster(connection *conn) {
     char tmpfile[256], *err = NULL;
     int dfd = -1, maxtries = 5;
-    int sockerr = 0, psync_result;
+    int psync_result;
 
     /* If this event fired after the user turned the instance into a master
      * with SLAVEOF NO ONE we must just return ASAP. */
@@ -1615,9 +1615,9 @@ void syncWithMaster(connection *conn) {
 
     /* Check for errors in the socket: after a non blocking connect() we
      * may find that the socket is in error state. */
-    if ((sockerr = connGetSocketError(conn))) {
+    if (connGetState(conn) != CONN_STATE_CONNECTED) {
         serverLog(LL_WARNING,"Error condition on socket for SYNC: %s",
-            strerror(sockerr));
+                connGetLastError(conn));
         goto error;
     }
 
@@ -1627,7 +1627,7 @@ void syncWithMaster(connection *conn) {
         /* Delete the writable event so that the readable event remains
          * registered and we can wait for the PONG reply. */
         connSetReadHandler(conn, syncWithMaster);
-        connSetWriteHandler(conn, NULL);    /* Not really needed, but do it on the safe side */
+        connSetWriteHandler(conn, NULL);
         server.repl_state = REPL_STATE_RECEIVE_PONG;
         /* Send the PING, don't check for errors at all, we have the timeout
          * that will take care about this. */
@@ -1853,7 +1853,7 @@ void syncWithMaster(connection *conn) {
     {
         serverLog(LL_WARNING,
             "Can't create readable event for SYNC: %s (fd=%d)",
-            strerror(errno),conn->fd);
+            strerror(errno), connGetFd(conn));
         goto error;
     }
 

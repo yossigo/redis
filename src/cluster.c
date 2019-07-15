@@ -618,7 +618,9 @@ static void clusterConnAcceptHandler(connection *conn) {
         serverLog(LL_VERBOSE,
                 "Error accepting cluster node connection: %s", connGetLastError(conn));
         connClose(conn, 0);
-        /* TODO Fix! */
+        /* TODO: The above is broken, handler callback should have a way to
+         * signal that connection is to be closed and freed.
+         */
         return;
     }
 
@@ -2277,7 +2279,7 @@ void clusterReadHandler(connection *conn) {
  * from event handlers that will do stuff with the same link later. */
 void clusterSendMessage(clusterLink *link, unsigned char *msg, size_t msglen) {
     if (sdslen(link->sndbuf) == 0 && msglen != 0)
-        connSetWriteHandler(link->conn, clusterWriteHandler); /* TODO: AE_BARRIER */
+        connSetWriteHandler(link->conn, clusterWriteHandler); /* TODO: Handle AE_BARRIER in conns */
 
     link->sndbuf = sdscatlen(link->sndbuf, msg, msglen);
 

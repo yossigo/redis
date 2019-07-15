@@ -773,7 +773,6 @@ int clientHasPendingReplies(client *c) {
 
 void clientAcceptHandler(connection *conn) {
     client *c = connGetPrivateData(conn);
-    char *ip = NULL;    /*TODO move it to conn */
 
     if (connGetState(conn) != CONN_STATE_CONNECTED) {
         serverLog(LL_WARNING,
@@ -790,10 +789,12 @@ void clientAcceptHandler(connection *conn) {
     if (server.protected_mode &&
         server.bindaddr_count == 0 &&
         DefaultUser->flags & USER_FLAG_NOPASS &&
-        !(c->flags & CLIENT_UNIX_SOCKET) &&
-        ip != NULL)
+        !(c->flags & CLIENT_UNIX_SOCKET))
     {
-        if (strcmp(ip,"127.0.0.1") && strcmp(ip,"::1")) {
+        char cip[NET_IP_STR_LEN+1] = { 0 };
+        connPeerToString(conn, cip, sizeof(cip)-1, NULL);
+
+        if (strcmp(cip,"127.0.0.1") && strcmp(cip,"::1")) {
             char *err =
                 "-DENIED Redis is running in protected mode because protected "
                 "mode is enabled, no bind address was specified, no "
@@ -970,7 +971,7 @@ void unlinkClient(client *c) {
          * it will finish reading the rdb. */
         int need_shutdown = ((c->flags & CLIENT_SLAVE) &&
                 (c->replstate == SLAVE_STATE_WAIT_BGSAVE_END));
-        connClose(c->conn, need_shutdown);  /* TODO: Do we really need shutdown? */
+        connClose(c->conn, need_shutdown);
         c->conn = NULL;
     }
 

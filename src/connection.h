@@ -28,31 +28,16 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-struct connection;
+typedef struct connection connection;
 
-typedef struct ConnectionType {
-    int (*connect)(struct connection *conn, const char *addr, int port, const char *source_addr);
-    int (*write)(struct connection *conn, const void *data, size_t data_len); 
-    int (*read)(struct connection *conn, void *buf, size_t buf_len); 
-    int (*close)(struct connection *conn, int shutdown);
-} ConnectionType;
+typedef enum {
+    CONN_STATE_CONNECTING = 1,
+    CONN_STATE_ACCEPTING,
+    CONN_STATE_CONNECTED,
+    CONN_STATE_ERROR
+} ConnectionState;
 
 typedef void (*ConnectionCallbackFunc)(struct connection *conn);
-
-#define CONN_STATE_CONNECTING   1
-#define CONN_STATE_ACCEPTING    2
-#define CONN_STATE_CONNECTED    2
-#define CONN_STATE_ERROR        3
-
-typedef struct connection {
-    ConnectionType *type;
-    int state;
-    int last_errno;
-    void *private_data;
-    ConnectionCallbackFunc write_handler;
-    ConnectionCallbackFunc read_handler;
-    int fd;
-} connection;
 
 connection *connCreateSocket();
 connection *connCreateAcceptedSocket(int fd);
@@ -80,14 +65,13 @@ int connConnect(connection *conn, const char *addr, int port, const char *src_ad
         ConnectionCallbackFunc connect_handler);
 int connBlockingConnect(connection *conn, const char *addr, int port, long long timeout);
 
-void connClone(connection *target, const connection *source);
 int connSetWriteHandler(connection *conn, ConnectionCallbackFunc func);
 int connSetReadHandler(connection *conn, ConnectionCallbackFunc func);
 int connHasWriteHandler(connection *conn);
 int connHasReadHandler(connection *conn);
 int connWrite(connection *conn, const void *data, size_t data_len);
 int connRead(connection *conn, void *buf, size_t buf_len);
-int connClose(connection *conn, int shutdown);
+void connClose(connection *conn, int shutdown);
 int connGetSocketError(connection *conn);
 void connSetPrivData(connection *conn, void *privdata);
 
