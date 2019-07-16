@@ -409,6 +409,10 @@ int connSendTimeout(connection *conn, long long ms) {
     return anetSendTimeout(NULL, conn->fd, ms);
 }
 
+int connRecvTimeout(connection *conn, long long ms) {
+    return anetRecvTimeout(NULL, conn->fd, ms);
+}
+
 const char *connGetLastError(connection *conn) {
     return strerror(conn->last_errno);
 }

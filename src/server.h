@@ -133,6 +133,7 @@ typedef long long mstime_t; /* millisecond time type. */
 #define CONFIG_DEFAULT_RDB_FILENAME "dump.rdb"
 #define CONFIG_DEFAULT_REPL_DISKLESS_SYNC 0
 #define CONFIG_DEFAULT_REPL_DISKLESS_SYNC_DELAY 5
+#define CONFIG_DEFAULT_RDB_KEY_SAVE_DELAY 0
 #define CONFIG_DEFAULT_SLAVE_SERVE_STALE_DATA 1
 #define CONFIG_DEFAULT_SLAVE_READ_ONLY 1
 #define CONFIG_DEFAULT_SLAVE_IGNORE_MAXMEMORY 1
@@ -255,8 +256,8 @@ typedef long long mstime_t; /* millisecond time type. */
 #define AOF_WAIT_REWRITE 2    /* AOF waits rewrite to start appending */
 
 /* Client flags */
-#define CLIENT_SLAVE (1<<0)   /* This client is a slave server */
-#define CLIENT_MASTER (1<<1)  /* This client is a master server */
+#define CLIENT_SLAVE (1<<0)   /* This client is a repliaca */
+#define CLIENT_MASTER (1<<1)  /* This client is a master */
 #define CLIENT_MONITOR (1<<2) /* This client is a slave monitor, see MONITOR */
 #define CLIENT_MULTI (1<<3)   /* This client is in a MULTI context */
 #define CLIENT_BLOCKED (1<<4) /* The client is waiting in a blocking operation */
@@ -290,7 +291,13 @@ typedef long long mstime_t; /* millisecond time type. */
 #define CLIENT_PENDING_READ (1<<29) /* The client has pending reads and was put
                                        in the list of clients we can read
                                        from. */
-#define CLIENT_PENDING_COMMAND (1<<30) /* */
+#define CLIENT_PENDING_COMMAND (1<<30) /* Used in threaded I/O to signal after
+                                          we return single threaded that the
+                                          client has already pending commands
+                                          to be executed. */
+#define CLIENT_TRACKING (1<<31) /* Client enabled keys tracking in order to
+                                   perform client side caching. */
+#define CLIENT_TRACKING_BROKEN_REDIR (1ULL<<32) /* Target client is invalid. */
 
 /* Client block type (btype field in client structure)
  * if CLIENT_BLOCKED flag is set. */
@@ -388,6 +395,12 @@ typedef long long mstime_t; /* millisecond time type. */
 #define AOF_FSYNC_ALWAYS 1
 #define AOF_FSYNC_EVERYSEC 2
 #define CONFIG_DEFAULT_AOF_FSYNC AOF_FSYNC_EVERYSEC
+
+/* Replication diskless load defines */
+#define REPL_DISKLESS_LOAD_DISABLED 0
+#define REPL_DISKLESS_LOAD_WHEN_DB_EMPTY 1
+#define REPL_DISKLESS_LOAD_SWAPDB 2
+#define CONFIG_DEFAULT_REPL_DISKLESS_LOAD REPL_DISKLESS_LOAD_DISABLED
 
 /* Zipped structures related defaults */
 #define OBJ_HASH_MAX_ZIPLIST_ENTRIES 512
@@ -647,6 +660,11 @@ typedef struct redisObject {
     void *ptr;
 } robj;
 
+/* The a string name for an object's type as listed above
+ * Native types are checked against the OBJ_STRING, OBJ_LIST, OBJ_* defines,
+ * and Module types have their registered name returned. */
+char *getObjectTypeName(robj*);
+
 /* Macro used to initialize a Redis object allocated on the stack.
  * Note that this macro is taken near the structure definition to make sure
  * we'll update it when the structure is changed, to avoid bugs like
@@ -817,7 +835,7 @@ typedef struct client {
     time_t ctime;           /* Client creation time. */
     time_t lastinteraction; /* Time of the last interaction, used for timeout */
     time_t obuf_soft_limit_reached_time;
-    int flags;              /* Client flags: CLIENT_* macros. */
+    uint64_t flags;         /* Client flags: CLIENT_* macros. */
     int authenticated;      /* Needed when the default user requires auth. */
     int replstate;          /* Replication state if this is a slave. */
     int repl_put_online_on_ack; /* Install slave write handler on ACK. */
@@ -845,6 +863,11 @@ typedef struct client {
     list *pubsub_patterns;  /* patterns a client is interested in (SUBSCRIBE) */
     sds peerid;             /* Cached peer ID. */
     listNode *client_list_node; /* list node in client list */
+
+    /* If this client is in tracking mode and this field is non zero,
+     * invalidation messages for keys fetched by this client will be send to
+     * the specified client ID. */
+    uint64_t client_tracking_redirection;
 
     /* Response buffer */
     int bufpos;
@@ -1143,6 +1166,7 @@ struct redisServer {
     int daemonize;                  /* True if running as a daemon */
     clientBufferLimitsConfig client_obuf_limits[CLIENT_TYPE_OBUF_COUNT];
     /* AOF persistence */
+    int aof_enabled;                /* AOF configuration */
     int aof_state;                  /* AOF_(ON|OFF|WAIT_REWRITE) */
     int aof_fsync;                  /* Kind of fsync() policy */
     char *aof_filename;             /* Name of the AOF file */
@@ -1199,6 +1223,8 @@ struct redisServer {
     int stop_writes_on_bgsave_err;  /* Don't allow writes if can't BGSAVE */
     int rdb_pipe_write_result_to_parent; /* RDB pipes used to return the state */
     int rdb_pipe_read_result_from_child; /* of each slave in diskless SYNC. */
+    int rdb_key_save_delay;         /* Delay in microseconds between keys while
+                                     * writing the RDB. (for testings) */
     /* Pipe and data structures for child -> parent info sharing. */
     int child_info_pipe[2];         /* Pipe used to write the child_info_data. */
     struct {
@@ -1234,7 +1260,9 @@ struct redisServer {
     int repl_min_slaves_to_write;   /* Min number of slaves to write. */
     int repl_min_slaves_max_lag;    /* Max lag of <count> slaves to write. */
     int repl_good_slaves_count;     /* Number of slaves with lag <= max_lag. */
-    int repl_diskless_sync;         /* Send RDB to slaves sockets directly. */
+    int repl_diskless_sync;         /* Master send RDB to slaves sockets directly. */
+    int repl_diskless_load;         /* Slave parse RDB directly from the socket.
+                                     * see REPL_DISKLESS_LOAD_* enum */
     int repl_diskless_sync_delay;   /* Delay to start a diskless repl BGSAVE. */
     /* Replication (slave) */
     char *masteruser;               /* AUTH with this user and masterauth with master */
@@ -1287,6 +1315,8 @@ struct redisServer {
     unsigned int blocked_clients_by_type[BLOCKED_NUM];
     list *unblocked_clients; /* list of clients to unblock before next loop */
     list *ready_keys;        /* List of readyList structures for BLPOP & co */
+    /* Client side caching. */
+    unsigned int tracking_clients;  /* # of clients with tracking enabled.*/
     /* Sort parameters - qsort_r() is only available under BSD so we
      * have to take this state global, in order to pass it to sortCompare() */
     int sort_desc;
@@ -1592,6 +1622,7 @@ void linkClient(client *c);
 void protectClient(client *c);
 void unprotectClient(client *c);
 void initThreadedIO(void);
+client *lookupClientByID(uint64_t id);
 
 #ifdef __GNUC__
 void addReplyErrorFormat(client *c, const char *fmt, ...)
@@ -1602,6 +1633,12 @@ void addReplyStatusFormat(client *c, const char *fmt, ...)
 void addReplyErrorFormat(client *c, const char *fmt, ...);
 void addReplyStatusFormat(client *c, const char *fmt, ...);
 #endif
+
+/* Client side caching (tracking mode) */
+void enableTracking(client *c, uint64_t redirect_to);
+void disableTracking(client *c);
+void trackingRememberKeys(client *c);
+void trackingInvalidateKey(robj *keyobj);
 
 /* List data type */
 void listTypeTryConversion(robj *subject, robj *value);
@@ -1715,7 +1752,8 @@ void replicationCacheMasterUsingMyself(void);
 void feedReplicationBacklog(void *ptr, size_t len);
 
 /* Generic persistence functions */
-void startLoading(FILE *fp);
+void startLoadingFile(FILE* fp, char* filename);
+void startLoading(size_t size);
 void loadingProgress(off_t pos);
 void stopLoading(void);
 
@@ -1927,6 +1965,7 @@ int pubsubUnsubscribeAllPatterns(client *c, int notify);
 void freePubsubPattern(void *p);
 int listMatchPubsubPattern(void *a, void *b);
 int pubsubPublishMessage(robj *channel, robj *message);
+void addReplyPubsubMessage(client *c, robj *channel, robj *msg);
 
 /* Keyspace events notification */
 void notifyKeyspaceEvent(int type, char *event, robj *key, int dbid);
@@ -1971,6 +2010,8 @@ robj *dbUnshareStringValue(redisDb *db, robj *key, robj *o);
 #define EMPTYDB_NO_FLAGS 0      /* No flags. */
 #define EMPTYDB_ASYNC (1<<0)    /* Reclaim memory in another thread. */
 long long emptyDb(int dbnum, int flags, void(callback)(void*));
+long long emptyDbGeneric(redisDb *dbarray, int dbnum, int flags, void(callback)(void*));
+long long dbTotalServerKeyCount();
 
 int selectDb(client *c, int id);
 void signalModifiedKey(redisDb *db, robj *key);

@@ -52,6 +52,7 @@ int connEnableTcpNoDelay(connection *conn);
 int connDisableTcpNoDelay(connection *conn);
 int connKeepAlive(connection *conn, int interval);
 int connSendTimeout(connection *conn, long long ms);
+int connRecvTimeout(connection *conn, long long ms);
 
 int connPeerToString(connection *conn, char *ip, size_t ip_len, int *port);
 int connFormatPeer(connection *conn, char *buf, size_t buf_len);
