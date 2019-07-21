@@ -2015,9 +2015,10 @@ void syncWithMaster(connection *conn) {
     if (connSetReadHandler(conn, readSyncBulkPayload)
             == C_ERR)
     {
+        char conninfo[CONN_INFO_LEN];
         serverLog(LL_WARNING,
-            "Can't create readable event for SYNC: %s (fd=%d)",
-            strerror(errno), connGetFd(conn));
+            "Can't create readable event for SYNC: %s (%s)",
+            strerror(errno), connGetInfo(conn, conninfo, sizeof(conninfo)));
         goto error;
     }
 

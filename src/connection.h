@@ -31,6 +31,8 @@
 #ifndef __REDIS_CONNECTION_H
 #define __REDIS_CONNECTION_H
 
+#define CONN_INFO_LEN   32
+
 typedef struct connection connection;
 
 typedef enum {
@@ -59,8 +61,9 @@ int connRecvTimeout(connection *conn, long long ms);
 
 int connPeerToString(connection *conn, char *ip, size_t ip_len, int *port);
 int connFormatPeer(connection *conn, char *buf, size_t buf_len);
-int connGetFd(connection *conn);
+int connSockName(connection *conn, char *ip, size_t ip_len, int *port);
 
+const char *connGetInfo(connection *conn, char *buf, size_t buf_len);
 const char *connGetLastError(connection *conn);
 
 /**/

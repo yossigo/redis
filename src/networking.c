@@ -1869,7 +1869,7 @@ char *getClientPeerId(client *c) {
 /* Concatenate a string representing the state of a client in an human
  * readable format, into the sds string 's'. */
 sds catClientInfoString(sds s, client *client) {
-    char flags[16], events[3], *p;
+    char flags[16], events[3], conninfo[CONN_INFO_LEN], *p;
 
     p = flags;
     if (client->flags & CLIENT_SLAVE) {
@@ -1900,10 +1900,10 @@ sds catClientInfoString(sds s, client *client) {
     }
     *p = '\0';
     return sdscatfmt(s,
-        "id=%U addr=%s fd=%i name=%s age=%I idle=%I flags=%s db=%i sub=%i psub=%i multi=%i qbuf=%U qbuf-free=%U obl=%U oll=%U omem=%U events=%s cmd=%s user=%s",
+        "id=%U addr=%s %s name=%s age=%I idle=%I flags=%s db=%i sub=%i psub=%i multi=%i qbuf=%U qbuf-free=%U obl=%U oll=%U omem=%U events=%s cmd=%s user=%s",
         (unsigned long long) client->id,
         getClientPeerId(client),
-        connGetFd(client->conn),
+        connGetInfo(client->conn, conninfo, sizeof(conninfo)),
         client->name ? (char*)client->name->ptr : "",
         (long long)(server.unixtime - client->ctime),
         (long long)(server.unixtime - client->lastinteraction),

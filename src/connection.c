@@ -359,10 +359,6 @@ static void connEventHandler(struct aeEventLoop *el, int fd, void *clientData, i
     }
 }
 
-int connGetFd(connection *conn) {
-    return conn->fd;
-}
-
 int connGetSocketError(connection *conn) {
     int sockerr = 0;
     socklen_t errlen = sizeof(sockerr);
@@ -378,6 +374,10 @@ int connPeerToString(connection *conn, char *ip, size_t ip_len, int *port) {
 
 int connFormatPeer(connection *conn, char *buf, size_t buf_len) {
     return anetFormatPeer(conn ? conn->fd : -1, buf, buf_len);
+}
+
+int connSockName(connection *conn, char *ip, size_t ip_len, int *port) {
+    return anetSockName(conn->fd, ip, ip_len, port);
 }
 
 int connBlock(connection *conn) {
@@ -419,5 +419,15 @@ const char *connGetLastError(connection *conn) {
 
 int connGetState(connection *conn) {
     return conn->state;
+}
+
+/* Return a text that describes the connection, suitable for inclusion
+ * in CLIENT LIST and similar outputs.
+ *
+ * For sockets, we always return "fd=<fdnum>" to maintain compatibility.
+ */
+const char *connGetInfo(connection *conn, char *buf, size_t buf_len) {
+    snprintf(buf, buf_len-1, "fd=%i", conn->fd);
+    return buf;
 }
 

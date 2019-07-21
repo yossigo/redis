@@ -1780,7 +1780,7 @@ int clusterProcessPacket(clusterLink *link) {
         {
             char ip[NET_IP_STR_LEN];
 
-            if (anetSockName(connGetFd(link->conn),ip,sizeof(ip),NULL) != -1 &&
+            if (connSockName(link->conn,ip,sizeof(ip),NULL) != -1 &&
                 strcmp(ip,myself->ip))
             {
                 memcpy(myself->ip,ip,NET_IP_STR_LEN);

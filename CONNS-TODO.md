@@ -8,5 +8,3 @@ Connection API TODO List
    event loop and a different mechanism that lends connections to threads -
    there could be additional performance benefits to it.
 3. Handlers API fix to allow connections to drop.
-4. Implement rioConn and rioConnSet.
-5. Remove connGetFd() completely to plug the leaky abstraction.
