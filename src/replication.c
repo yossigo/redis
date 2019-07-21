@@ -1359,7 +1359,7 @@ void readSyncBulkPayload(connection *conn) {
     rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
     if (use_diskless_load) {
         rio rdb;
-        rioInitWithFd(&rdb,connGetFd(conn),server.repl_transfer_size);
+        rioInitWithConn(&rdb,conn,server.repl_transfer_size);
 
         /* Put the socket in blocking mode to simplify RDB transfer.
          * We'll restore it when the RDB is received. */
@@ -1374,7 +1374,7 @@ void readSyncBulkPayload(connection *conn) {
                 "Failed trying to load the MASTER synchronization DB "
                 "from socket");
             cancelReplicationHandshake();
-            rioFreeFd(&rdb, NULL);
+            rioFreeConn(&rdb, NULL);
             if (server.repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB) {
                 /* Restore the backed up databases. */
                 disklessLoadRestoreBackups(diskless_load_backup,1,
@@ -1407,14 +1407,14 @@ void readSyncBulkPayload(connection *conn) {
             {
                 serverLog(LL_WARNING,"Replication stream EOF marker is broken");
                 cancelReplicationHandshake();
-                rioFreeFd(&rdb, NULL);
+                rioFreeConn(&rdb, NULL);
                 return;
             }
         }
 
         /* Cleanup and restore the socket to the original state to continue
          * with the normal replication. */
-        rioFreeFd(&rdb, NULL);
+        rioFreeConn(&rdb, NULL);
         connNonBlock(conn);
         connRecvTimeout(conn,0);
     } else {

@@ -28,6 +28,9 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#ifndef __REDIS_CONNECTION_H
+#define __REDIS_CONNECTION_H
+
 typedef struct connection connection;
 
 typedef enum {
@@ -80,3 +83,4 @@ ssize_t connSyncWrite(connection *conn, char *ptr, ssize_t size, long long timeo
 ssize_t connSyncRead(connection *conn, char *ptr, ssize_t size, long long timeout);
 ssize_t connSyncReadLine(connection *conn, char *ptr, ssize_t size, long long timeout);
 
+#endif  /* __REDIS_CONNECTION_H */
