@@ -67,6 +67,7 @@ typedef struct ConnectionType {
 struct connection {
     ConnectionType *type;
     ConnectionState state;
+    int flags;
     int last_errno;
     void *private_data;
     ConnectionCallbackFunc write_handler;
@@ -129,6 +130,19 @@ connection *connCreateAcceptedSocket(int fd) {
     return conn;
 }
 
+static inline void enterHandler(connection *conn) {
+    conn->flags |= CONN_FLAG_IN_HANDLER;
+}
+
+static inline int exitHandler(connection *conn) {
+    conn->flags &= ~CONN_FLAG_IN_HANDLER;
+    if (conn->flags & CONN_FLAG_CLOSE_SCHEDULED) {
+        connClose(conn, 0);
+        return 0;
+    }
+    return 1;
+}
+
 /* The connection module does not deal with listening and accepting sockets,
  * so we assume we have a socket when an incoming connection is created.
  *
@@ -143,7 +157,9 @@ connection *connCreateAcceptedSocket(int fd) {
 int connAccept(connection *conn, ConnectionCallbackFunc accept_handler) {
     if (conn->state != CONN_STATE_ACCEPTING) return C_ERR;
     conn->state = CONN_STATE_CONNECTED;
+    enterHandler(conn);
     accept_handler(conn);
+    if (!exitHandler(conn)) return C_ERR;
     return C_OK;
 }
 
@@ -261,6 +277,14 @@ void connClose(connection *conn, int do_shutdown) {
         conn->fd = -1;
     }
 
+    /* If called from within a handler, schedule the close but
+     * keep the connection until the handler returns.
+     */
+    if (conn->flags & CONN_FLAG_IN_HANDLER) {
+        conn->flags |= CONN_FLAG_CLOSE_SCHEDULED;
+        return;
+    }
+
     zfree(conn);
 }
 
@@ -347,15 +371,21 @@ static void connEventHandler(struct aeEventLoop *el, int fd, void *clientData, i
         conn->write_handler = NULL;
         aeDeleteFileEvent(server.el,conn->fd,AE_WRITABLE);
 
+        enterHandler(conn);
         handler(conn);
+        if (!exitHandler(conn)) return;
     }
 
     /* Handle normal I/O flows */
     if ((mask & AE_READABLE) && conn->read_handler) {
+        enterHandler(conn);
         conn->read_handler(conn);
+        if (!exitHandler(conn)) return;
     }
     if ((mask & AE_WRITABLE) && conn->write_handler) {
+        enterHandler(conn);
         conn->write_handler(conn);
+        if (!exitHandler(conn)) return;
     }
 }
 

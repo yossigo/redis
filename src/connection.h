@@ -42,6 +42,9 @@ typedef enum {
     CONN_STATE_ERROR
 } ConnectionState;
 
+#define CONN_FLAG_IN_HANDLER        (1<<0)      /* A handler execution is in progress */
+#define CONN_FLAG_CLOSE_SCHEDULED   (1<<1)      /* Closed scheduled by a handler */
+
 typedef void (*ConnectionCallbackFunc)(struct connection *conn);
 
 connection *connCreateSocket();
