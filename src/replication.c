@@ -1058,7 +1058,7 @@ void replicationSendNewlineToMaster(void) {
     if (time(NULL) != newline_sent) {
         newline_sent = time(NULL);
         /* Pinging back in this stage is best-effort. */
-        connWrite(server.repl_transfer_s, "\n", 1);
+        if (server.repl_transfer_s) connWrite(server.repl_transfer_s, "\n", 1);
     }
 }
 
