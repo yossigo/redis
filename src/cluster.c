@@ -601,7 +601,7 @@ clusterLink *createClusterLink(clusterNode *node) {
  * with this link will have the 'link' field set to NULL. */
 void freeClusterLink(clusterLink *link) {
     if (link->conn) {
-        connClose(link->conn, 0);
+        connClose(link->conn);
         link->conn = NULL;
     }
     sdsfree(link->sndbuf);
@@ -617,7 +617,7 @@ static void clusterConnAcceptHandler(connection *conn) {
     if (connGetState(conn) != CONN_STATE_CONNECTED) {
         serverLog(LL_VERBOSE,
                 "Error accepting cluster node connection: %s", connGetLastError(conn));
-        connClose(conn, 0);
+        connClose(conn);
         /* TODO: The above is broken, handler callback should have a way to
          * signal that connection is to be closed and freed.
          */
@@ -673,7 +673,7 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             serverLog(LL_VERBOSE,
                     "Error accepting cluster node connection: %s",
                     connGetLastError(conn));
-            connClose(conn, 0);
+            connClose(conn);
             return;
         }
     }
@@ -5018,7 +5018,7 @@ migrateCachedSocket* migrateGetSocket(client *c, robj *host, robj *port, long ti
         /* Too many items, drop one at random. */
         dictEntry *de = dictGetRandomKey(server.migrate_cached_sockets);
         cs = dictGetVal(de);
-        connClose(cs->conn, 0);
+        connClose(cs->conn);
         zfree(cs);
         dictDelete(server.migrate_cached_sockets,dictGetKey(de));
     }
@@ -5029,7 +5029,7 @@ migrateCachedSocket* migrateGetSocket(client *c, robj *host, robj *port, long ti
             != C_OK) {
         addReplySds(c,
             sdsnew("-IOERR error or timeout connecting to the client\r\n"));
-        connClose(conn, 0);
+        connClose(conn);
         sdsfree(name);
         return NULL;
     }
@@ -5059,7 +5059,7 @@ void migrateCloseSocket(robj *host, robj *port) {
         return;
     }
 
-    connClose(cs->conn, 0);
+    connClose(cs->conn);
     zfree(cs);
     dictDelete(server.migrate_cached_sockets,name);
     sdsfree(name);
@@ -5073,7 +5073,7 @@ void migrateCloseTimedoutSockets(void) {
         migrateCachedSocket *cs = dictGetVal(de);
 
         if ((server.unixtime - cs->last_use_time) > MIGRATE_SOCKET_CACHE_TTL) {
-            connClose(cs->conn, 0);
+            connClose(cs->conn);
             zfree(cs);
             dictDelete(server.migrate_cached_sockets,dictGetKey(de));
         }

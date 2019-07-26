@@ -36,7 +36,8 @@
 typedef struct connection connection;
 
 typedef enum {
-    CONN_STATE_CONNECTING = 1,
+    CONN_STATE_NONE = 0,
+    CONN_STATE_CONNECTING,
     CONN_STATE_ACCEPTING,
     CONN_STATE_CONNECTED,
     CONN_STATE_ERROR
@@ -47,13 +48,105 @@ typedef enum {
 
 typedef void (*ConnectionCallbackFunc)(struct connection *conn);
 
+typedef struct ConnectionType {
+    int (*connect)(struct connection *conn, const char *addr, int port, const char *source_addr, ConnectionCallbackFunc connect_handler);
+    int (*write)(struct connection *conn, const void *data, size_t data_len);
+    int (*read)(struct connection *conn, void *buf, size_t buf_len);
+    int (*shutdown)(struct connection *conn, int how);
+    void (*close)(struct connection *conn);
+    int (*accept)(struct connection *conn, ConnectionCallbackFunc accept_handler);
+    int (*set_write_handler)(struct connection *conn, ConnectionCallbackFunc handler);
+    int (*set_read_handler)(struct connection *conn, ConnectionCallbackFunc handler);
+    const char *(*get_last_error)(struct connection *conn);
+} ConnectionType;
+
+struct connection {
+    ConnectionType *type;
+    ConnectionState state;
+    int flags;
+    int last_errno;
+    void *private_data;
+    ConnectionCallbackFunc conn_handler;
+    ConnectionCallbackFunc write_handler;
+    ConnectionCallbackFunc read_handler;
+    int fd;
+};
+
+/* The connection module does not deal with listening and accepting sockets,
+ * so we assume we have a socket when an incoming connection is created.
+ *
+ * The fd supplied should therefore be associated with an already accept()ed
+ * socket.
+ *
+ * connAccept() may directly call accept_handler(), or return and call it
+ * at a later time. This behavior is a bit awkward but aims to reduce the need
+ * to wait for the next event loop, if no additional handshake is required.
+ */
+
+static inline int connAccept(connection *conn, ConnectionCallbackFunc accept_handler) {
+    return conn->type->accept(conn, accept_handler);
+}
+
+/* Establish a connection.  The connect_handler will be called when the connection
+ * is established, or if an error has occured.
+ *
+ * The connection handler will be responsible to set up any read/write handlers
+ * as needed.
+ *
+ * If C_ERR is returned, the operation failed and the connection handler shall
+ * not be expected.
+ */
+static inline int connConnect(connection *conn, const char *addr, int port, const char *src_addr,
+        ConnectionCallbackFunc connect_handler) {
+    return conn->type->connect(conn, addr, port, src_addr, connect_handler);
+}
+
+/* Write to connection, behaves the same as write(2).
+ */
+static inline int connWrite(connection *conn, const void *data, size_t data_len) {
+    return conn->type->write(conn, data, data_len);
+}
+
+/* Read from the connection, behaves the same as read(2).
+ */
+static inline int connRead(connection *conn, void *buf, size_t buf_len) {
+    return conn->type->read(conn, buf, buf_len);
+}
+
+/* Register a write handler, to be called when the connection is writable.
+ * If NULL, the existing handler is removed.
+ */
+static inline int connSetWriteHandler(connection *conn, ConnectionCallbackFunc func) {
+    return conn->type->set_write_handler(conn, func);
+}
+
+/* Register a read handler, to be called when the connection is readable.
+ * If NULL, the existing handler is removed.
+ */
+static inline int connSetReadHandler(connection *conn, ConnectionCallbackFunc func) {
+    return conn->type->set_read_handler(conn, func);
+}
+
+static inline void connClose(connection *conn) {
+    conn->type->close(conn);
+}
+
+static inline int connShutdown(connection *conn, int how) {
+    return conn->type->shutdown(conn, how);
+}
+
+static inline const char *connGetLastError(connection *conn) {
+    return conn->type->get_last_error(conn);
+}
+
 connection *connCreateSocket();
 connection *connCreateAcceptedSocket(int fd);
-int connAccept(connection *conn, ConnectionCallbackFunc accept_handler);
 void connSetPrivateData(connection *conn, void *data);
 void *connGetPrivateData(connection *conn);
 int connGetState(connection *conn);
 int connIsCreated(connection *conn);
+
+/* anet-style wrappers to conns */
 int connBlock(connection *conn);
 int connNonBlock(connection *conn);
 int connEnableTcpNoDelay(connection *conn);
@@ -61,13 +154,10 @@ int connDisableTcpNoDelay(connection *conn);
 int connKeepAlive(connection *conn, int interval);
 int connSendTimeout(connection *conn, long long ms);
 int connRecvTimeout(connection *conn, long long ms);
-
 int connPeerToString(connection *conn, char *ip, size_t ip_len, int *port);
 int connFormatPeer(connection *conn, char *buf, size_t buf_len);
 int connSockName(connection *conn, char *ip, size_t ip_len, int *port);
-
 const char *connGetInfo(connection *conn, char *buf, size_t buf_len);
-const char *connGetLastError(connection *conn);
 
 /**/
 
@@ -75,16 +165,14 @@ int connConnect(connection *conn, const char *addr, int port, const char *src_ad
         ConnectionCallbackFunc connect_handler);
 int connBlockingConnect(connection *conn, const char *addr, int port, long long timeout);
 
-int connSetWriteHandler(connection *conn, ConnectionCallbackFunc func);
-int connSetReadHandler(connection *conn, ConnectionCallbackFunc func);
 int connHasWriteHandler(connection *conn);
 int connHasReadHandler(connection *conn);
 int connWrite(connection *conn, const void *data, size_t data_len);
 int connRead(connection *conn, void *buf, size_t buf_len);
-void connClose(connection *conn, int shutdown);
 int connGetSocketError(connection *conn);
 void connSetPrivData(connection *conn, void *privdata);
 
+/* syncio stuff */
 ssize_t connSyncWrite(connection *conn, char *ptr, ssize_t size, long long timeout);
 ssize_t connSyncRead(connection *conn, char *ptr, ssize_t size, long long timeout);
 ssize_t connSyncReadLine(connection *conn, char *ptr, ssize_t size, long long timeout);

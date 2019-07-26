@@ -1769,7 +1769,7 @@ void syncWithMaster(connection *conn) {
     /* If this event fired after the user turned the instance into a master
      * with SLAVEOF NO ONE we must just return ASAP. */
     if (server.repl_state == REPL_STATE_NONE) {
-        connClose(conn, 0);
+        connClose(conn);
         return;
     }
 
@@ -2031,7 +2031,7 @@ void syncWithMaster(connection *conn) {
 
 error:
     if (dfd != -1) close(dfd);
-    connClose(conn, 0);
+    connClose(conn);
     server.repl_transfer_s = NULL;
     if (server.repl_transfer_fd != -1)
         close(server.repl_transfer_fd);
@@ -2054,7 +2054,7 @@ int connectWithMaster(void) {
                 NET_FIRST_BIND_ADDR, syncWithMaster) == C_ERR) {
         serverLog(LL_WARNING,"Unable to connect to MASTER: %s",
                 connGetLastError(server.repl_transfer_s));
-        connClose(server.repl_transfer_s, 0);
+        connClose(server.repl_transfer_s);
         server.repl_transfer_s = NULL;
         return C_ERR;
     }
@@ -2070,7 +2070,7 @@ int connectWithMaster(void) {
  * Never call this function directly, use cancelReplicationHandshake() instead.
  */
 void undoConnectWithMaster(void) {
-    connClose(server.repl_transfer_s, 0);
+    connClose(server.repl_transfer_s);
     server.repl_transfer_s = NULL;
 }
 

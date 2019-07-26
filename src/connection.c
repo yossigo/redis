@@ -57,25 +57,10 @@
  * integrated we'll transition this into ConnectionType properly.
  */
 
-typedef struct ConnectionType {
-    int (*connect)(struct connection *conn, const char *addr, int port, const char *source_addr);
-    int (*write)(struct connection *conn, const void *data, size_t data_len);
-    int (*read)(struct connection *conn, void *buf, size_t buf_len);
-    int (*close)(struct connection *conn, int shutdown);
-} ConnectionType;
-
-struct connection {
-    ConnectionType *type;
-    ConnectionState state;
-    int flags;
-    int last_errno;
-    void *private_data;
-    ConnectionCallbackFunc write_handler;
-    ConnectionCallbackFunc read_handler;
-    int fd;
-};
-
 ConnectionType CT_Socket;
+
+/* fwd declaration */
+static void connSocketEventHandler(struct aeEventLoop *el, int fd, void *clientData, int mask);
 
 /* When a connection is created we must know its type already, but the
  * underlying socket may or may not exist:
@@ -100,21 +85,12 @@ ConnectionType CT_Socket;
  * be embedded in different structs, not just client.
  */
 
-static connection *connCreateGeneric(ConnectionType *type) {
+connection *connCreateSocket() {
     connection *conn = zcalloc(sizeof(connection));
-    conn->type = type;
+    conn->type = &CT_Socket;
     conn->fd = -1;
 
     return conn;
-}
-
-/* Create a new socket-type connection, not associated with an existing
- * socket (i.e. when connConnect() is about to be used).
- *
- * In the future, we'll have connCreateTLS() as well.
- */
-connection *connCreateSocket() {
-    return connCreateGeneric(&CT_Socket);
 }
 
 /* Create a new socket-type connection that is already associated with
@@ -124,7 +100,7 @@ connection *connCreateSocket() {
  * invoked the connection-level accept handler.
  */
 connection *connCreateAcceptedSocket(int fd) {
-    connection *conn = connCreateGeneric(&CT_Socket);
+    connection *conn = connCreateSocket();
     conn->fd = fd;
     conn->state = CONN_STATE_ACCEPTING;
     return conn;
@@ -137,43 +113,18 @@ static inline void enterHandler(connection *conn) {
 static inline int exitHandler(connection *conn) {
     conn->flags &= ~CONN_FLAG_IN_HANDLER;
     if (conn->flags & CONN_FLAG_CLOSE_SCHEDULED) {
-        connClose(conn, 0);
+        connClose(conn);
         return 0;
     }
     return 1;
 }
 
-/* The connection module does not deal with listening and accepting sockets,
- * so we assume we have a socket when an incoming connection is created.
- *
- * The fd supplied should therefore be associated with an already accept()ed
- * socket.
- *
- * connAccept() may directly call accept_handler(), or return and call it
- * at a later time. This behavior is a bit awkward but aims to reduce the need
- * to wait for the next event loop, if no additional handshake is required.
- */
+#define CALL_HANDLER(conn, handler) \
+    enterHandler(conn); \
+    if (conn->handler) conn->handler(conn); \
+    if (!exitHandler(conn)) return;
 
-int connAccept(connection *conn, ConnectionCallbackFunc accept_handler) {
-    if (conn->state != CONN_STATE_ACCEPTING) return C_ERR;
-    conn->state = CONN_STATE_CONNECTED;
-    enterHandler(conn);
-    accept_handler(conn);
-    if (!exitHandler(conn)) return C_ERR;
-    return C_OK;
-}
-
-/* Establish a connection.  The connect_handler will be called when the connection
- * is established, or if an error has occured.
- *
- * The connection handler will be responsible to set up any read/write handlers
- * as needed.
- *
- * If C_ERR is returned, the operation failed and the connection handler shall
- * not be expected.
- */
-
-int connConnect(connection *conn, const char *addr, int port, const char *src_addr,
+int connSocketConnect(connection *conn, const char *addr, int port, const char *src_addr,
         ConnectionCallbackFunc connect_handler) {
     int fd = anetTcpNonBlockBestEffortBindConnect(NULL,addr,port,src_addr);
     if (fd == -1) {
@@ -184,7 +135,10 @@ int connConnect(connection *conn, const char *addr, int port, const char *src_ad
 
     conn->fd = fd;
     conn->state = CONN_STATE_CONNECTING;
-    connSetWriteHandler(conn, connect_handler);
+
+    conn->conn_handler = connect_handler;
+    aeCreateFileEvent(server.el, conn->fd, AE_WRITABLE,
+            connSocketEventHandler, conn);
 
     return C_OK;
 }
@@ -214,49 +168,6 @@ int connBlockingConnect(connection *conn, const char *addr, int port, long long 
     return C_OK;
 }
 
-/* Write to connection, behaves the same as write(2).
- */
-int connWrite(connection *conn, const void *data, size_t data_len) {
-    return conn->type->write(conn, data, data_len);
-}
-
-/* Read from the connection, behaves the same as read(2).
- */
-int connRead(connection *conn, void *buf, size_t buf_len) {
-    return conn->type->read(conn, buf, buf_len);
-}
-
-/* fwd declaration */
-static void connEventHandler(struct aeEventLoop *el, int fd, void *clientData, int mask);
-
-/* Register a write handler, to be called when the connection is writable.
- * If NULL, the existing handler is removed.
- */
-int connSetWriteHandler(connection *conn, ConnectionCallbackFunc func) {
-    if (func == conn->write_handler) return C_OK;
-
-    conn->write_handler = func;
-    if (!conn->write_handler)
-        aeDeleteFileEvent(server.el,conn->fd,AE_WRITABLE);
-    else
-        aeCreateFileEvent(server.el,conn->fd,AE_WRITABLE,connEventHandler,conn);
-    return C_OK;
-}
-
-/* Register a read handler, to be called when the connection is readable.
- * If NULL, the existing handler is removed.
- */
-int connSetReadHandler(connection *conn, ConnectionCallbackFunc func) {
-    if (func == conn->read_handler) return C_OK;
-
-    conn->read_handler = func;
-    if (!conn->read_handler)
-        aeDeleteFileEvent(server.el,conn->fd,AE_READABLE);
-    else
-        aeCreateFileEvent(server.el,conn->fd,AE_READABLE,connEventHandler,conn);
-    return C_OK;
-}
-
 /* Returns true if a write handler is registered */
 int connHasWriteHandler(connection *conn) {
     return conn->write_handler != NULL;
@@ -265,27 +176,6 @@ int connHasWriteHandler(connection *conn) {
 /* Returns true if a read handler is registered */
 int connHasReadHandler(connection *conn) {
     return conn->read_handler != NULL;
-}
-
-/* Close the connection and free resources. */
-void connClose(connection *conn, int do_shutdown) {
-    if (conn->fd != -1) {
-        if (do_shutdown) shutdown(conn->fd,SHUT_RDWR);
-        aeDeleteFileEvent(server.el,conn->fd,AE_READABLE);
-        aeDeleteFileEvent(server.el,conn->fd,AE_WRITABLE);
-        close(conn->fd);
-        conn->fd = -1;
-    }
-
-    /* If called from within a handler, schedule the close but
-     * keep the connection until the handler returns.
-     */
-    if (conn->flags & CONN_FLAG_IN_HANDLER) {
-        conn->flags |= CONN_FLAG_CLOSE_SCHEDULED;
-        return;
-    }
-
-    zfree(conn);
 }
 
 /* Connection-based versions of syncio.c functions.
@@ -331,6 +221,30 @@ void *connGetPrivateData(connection *conn) {
  * move here as we implement additional connection types.
  */
 
+int connSocketShutdown(connection *conn, int how) {
+    return shutdown(conn->fd, how);
+}
+
+/* Close the connection and free resources. */
+void connSocketClose(connection *conn) {
+    if (conn->fd != -1) {
+        aeDeleteFileEvent(server.el,conn->fd,AE_READABLE);
+        aeDeleteFileEvent(server.el,conn->fd,AE_WRITABLE);
+        close(conn->fd);
+        conn->fd = -1;
+    }
+
+    /* If called from within a handler, schedule the close but
+     * keep the connection until the handler returns.
+     */
+    if (conn->flags & CONN_FLAG_IN_HANDLER) {
+        conn->flags |= CONN_FLAG_CLOSE_SCHEDULED;
+        return;
+    }
+
+    zfree(conn);
+}
+
 static int connSocketWrite(connection *conn, const void *data, size_t data_len) {
     return write(conn->fd, data, data_len);
 }
@@ -339,19 +253,67 @@ static int connSocketRead(connection *conn, void *buf, size_t buf_len) {
     return read(conn->fd, buf, buf_len);
 }
 
+static int connSocketAccept(connection *conn, ConnectionCallbackFunc accept_handler) {
+    if (conn->state != CONN_STATE_ACCEPTING) return C_ERR;
+    conn->state = CONN_STATE_CONNECTED;
+    enterHandler(conn);
+    accept_handler(conn);
+    if (!exitHandler(conn)) return C_ERR;
+    return C_OK;
+}
+
+/* Register a write handler, to be called when the connection is writable.
+ * If NULL, the existing handler is removed.
+ */
+int connSocketSetWriteHandler(connection *conn, ConnectionCallbackFunc func) {
+    if (func == conn->write_handler) return C_OK;
+
+    conn->write_handler = func;
+    if (!conn->write_handler)
+        aeDeleteFileEvent(server.el,conn->fd,AE_WRITABLE);
+    else
+        aeCreateFileEvent(server.el,conn->fd,AE_WRITABLE,connSocketEventHandler,conn);
+    return C_OK;
+}
+
+/* Register a read handler, to be called when the connection is readable.
+ * If NULL, the existing handler is removed.
+ */
+int connSocketSetReadHandler(connection *conn, ConnectionCallbackFunc func) {
+    if (func == conn->read_handler) return C_OK;
+
+    conn->read_handler = func;
+    if (!conn->read_handler)
+        aeDeleteFileEvent(server.el,conn->fd,AE_READABLE);
+    else
+        aeCreateFileEvent(server.el,conn->fd,AE_READABLE,connSocketEventHandler,conn);
+    return C_OK;
+}
+
+const char *connSocketGetLastError(connection *conn) {
+    return strerror(conn->last_errno);
+}
+
 ConnectionType CT_Socket = {
+    .close = connSocketClose,
+    .shutdown = connSocketShutdown,
     .write = connSocketWrite,
-    .read = connSocketRead
+    .read = connSocketRead,
+    .accept = connSocketAccept,
+    .connect = connSocketConnect,
+    .set_write_handler = connSocketSetWriteHandler,
+    .set_read_handler = connSocketSetReadHandler,
+    .get_last_error = connSocketGetLastError
 };
 
-static void connEventHandler(struct aeEventLoop *el, int fd, void *clientData, int mask)
+static void connSocketEventHandler(struct aeEventLoop *el, int fd, void *clientData, int mask)
 {
     UNUSED(el);
     UNUSED(fd);
     connection *conn = clientData;
 
     if (conn->state == CONN_STATE_CONNECTING &&
-            (mask & AE_WRITABLE) && conn->write_handler) {
+            (mask & AE_WRITABLE) && conn->conn_handler) {
 
         if (connGetSocketError(conn)) {
             conn->last_errno = errno;
@@ -360,19 +322,11 @@ static void connEventHandler(struct aeEventLoop *el, int fd, void *clientData, i
             conn->state = CONN_STATE_CONNECTED;
         }
 
-        /* Call connect handler. We need to do it only once and remove it, but
-         * do it before calling the handler not to overwrite a a new write handler
-         * that may be set by the user.
-         */
-        ConnectionCallbackFunc handler = conn->write_handler;
-
-        /* Remove write handler.  The callback may register a new one if needed.
-         */
-        conn->write_handler = NULL;
-        aeDeleteFileEvent(server.el,conn->fd,AE_WRITABLE);
+        if (!conn->write_handler) aeDeleteFileEvent(server.el,conn->fd,AE_WRITABLE);
 
         enterHandler(conn);
-        handler(conn);
+        conn->conn_handler(conn);
+        conn->conn_handler = NULL;
         if (!exitHandler(conn)) return;
     }
 
@@ -441,10 +395,6 @@ int connSendTimeout(connection *conn, long long ms) {
 
 int connRecvTimeout(connection *conn, long long ms) {
     return anetRecvTimeout(NULL, conn->fd, ms);
-}
-
-const char *connGetLastError(connection *conn) {
-    return strerror(conn->last_errno);
 }
 
 int connGetState(connection *conn) {

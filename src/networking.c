@@ -860,10 +860,12 @@ static void acceptCommonHandler(int fd, int flags, char *ip) {
     /* Create connection and client */
     conn = connCreateAcceptedSocket(fd);
     if ((c = createClient(conn)) == NULL) {
+        char conninfo[100];
         serverLog(LL_WARNING,
-            "Error registering fd event for the new client: %s (fd=%d)",
-            strerror(errno),fd);
-        connClose(conn, 0); /* May be already closed, just ignore errors */
+            "Error registering fd event for the new client: %s (conn: %s)",
+            connGetLastError(conn),
+            connGetInfo(conn, conninfo, sizeof(conninfo)));
+        connClose(conn); /* May be already closed, just ignore errors */
         return;
     }
 
@@ -882,7 +884,7 @@ static void acceptCommonHandler(int fd, int flags, char *ip) {
         serverLog(LL_WARNING,
                 "Error accepting a client connection: %s (fd=%d)",
                 connGetLastError(conn), fd);
-        connClose(conn, 0);
+        connClose(conn);
         return;
     }
 }
@@ -972,7 +974,8 @@ void unlinkClient(client *c) {
          * it will finish reading the rdb. */
         int need_shutdown = ((c->flags & CLIENT_SLAVE) &&
                 (c->replstate == SLAVE_STATE_WAIT_BGSAVE_END));
-        connClose(c->conn, need_shutdown);
+        if (need_shutdown) connShutdown(c->conn, SHUT_RDWR);
+        connClose(c->conn);
         c->conn = NULL;
     }
 
