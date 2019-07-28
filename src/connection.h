@@ -33,6 +33,7 @@
 
 #define CONN_INFO_LEN   32
 
+struct aeEventLoop;
 typedef struct connection connection;
 
 typedef enum {
@@ -49,6 +50,7 @@ typedef enum {
 typedef void (*ConnectionCallbackFunc)(struct connection *conn);
 
 typedef struct ConnectionType {
+    void (*ae_handler)(struct aeEventLoop *el, int fd, void *clientData, int mask);
     int (*connect)(struct connection *conn, const char *addr, int port, const char *source_addr, ConnectionCallbackFunc connect_handler);
     int (*write)(struct connection *conn, const void *data, size_t data_len);
     int (*read)(struct connection *conn, void *buf, size_t buf_len);
@@ -59,6 +61,8 @@ typedef struct ConnectionType {
     int (*set_read_handler)(struct connection *conn, ConnectionCallbackFunc handler);
     const char *(*get_last_error)(struct connection *conn);
 } ConnectionType;
+
+extern ConnectionType CT_Socket;
 
 struct connection {
     ConnectionType *type;

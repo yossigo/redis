@@ -59,9 +59,6 @@
 
 ConnectionType CT_Socket;
 
-/* fwd declaration */
-static void connSocketEventHandler(struct aeEventLoop *el, int fd, void *clientData, int mask);
-
 /* When a connection is created we must know its type already, but the
  * underlying socket may or may not exist:
  *
@@ -119,11 +116,6 @@ static inline int exitHandler(connection *conn) {
     return 1;
 }
 
-#define CALL_HANDLER(conn, handler) \
-    enterHandler(conn); \
-    if (conn->handler) conn->handler(conn); \
-    if (!exitHandler(conn)) return;
-
 int connSocketConnect(connection *conn, const char *addr, int port, const char *src_addr,
         ConnectionCallbackFunc connect_handler) {
     int fd = anetTcpNonBlockBestEffortBindConnect(NULL,addr,port,src_addr);
@@ -138,7 +130,7 @@ int connSocketConnect(connection *conn, const char *addr, int port, const char *
 
     conn->conn_handler = connect_handler;
     aeCreateFileEvent(server.el, conn->fd, AE_WRITABLE,
-            connSocketEventHandler, conn);
+            conn->type->ae_handler, conn);
 
     return C_OK;
 }
@@ -272,7 +264,7 @@ int connSocketSetWriteHandler(connection *conn, ConnectionCallbackFunc func) {
     if (!conn->write_handler)
         aeDeleteFileEvent(server.el,conn->fd,AE_WRITABLE);
     else
-        aeCreateFileEvent(server.el,conn->fd,AE_WRITABLE,connSocketEventHandler,conn);
+        aeCreateFileEvent(server.el,conn->fd,AE_WRITABLE,conn->type->ae_handler,conn);
     return C_OK;
 }
 
@@ -286,25 +278,13 @@ int connSocketSetReadHandler(connection *conn, ConnectionCallbackFunc func) {
     if (!conn->read_handler)
         aeDeleteFileEvent(server.el,conn->fd,AE_READABLE);
     else
-        aeCreateFileEvent(server.el,conn->fd,AE_READABLE,connSocketEventHandler,conn);
+        aeCreateFileEvent(server.el,conn->fd,AE_READABLE,conn->type->ae_handler,conn);
     return C_OK;
 }
 
 const char *connSocketGetLastError(connection *conn) {
     return strerror(conn->last_errno);
 }
-
-ConnectionType CT_Socket = {
-    .close = connSocketClose,
-    .shutdown = connSocketShutdown,
-    .write = connSocketWrite,
-    .read = connSocketRead,
-    .accept = connSocketAccept,
-    .connect = connSocketConnect,
-    .set_write_handler = connSocketSetWriteHandler,
-    .set_read_handler = connSocketSetReadHandler,
-    .get_last_error = connSocketGetLastError
-};
 
 static void connSocketEventHandler(struct aeEventLoop *el, int fd, void *clientData, int mask)
 {
@@ -342,6 +322,20 @@ static void connSocketEventHandler(struct aeEventLoop *el, int fd, void *clientD
         if (!exitHandler(conn)) return;
     }
 }
+
+ConnectionType CT_Socket = {
+    .ae_handler = connSocketEventHandler,
+    .close = connSocketClose,
+    .shutdown = connSocketShutdown,
+    .write = connSocketWrite,
+    .read = connSocketRead,
+    .accept = connSocketAccept,
+    .connect = connSocketConnect,
+    .set_write_handler = connSocketSetWriteHandler,
+    .set_read_handler = connSocketSetReadHandler,
+    .get_last_error = connSocketGetLastError
+};
+
 
 int connGetSocketError(connection *conn) {
     int sockerr = 0;
