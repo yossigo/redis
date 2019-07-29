@@ -2217,11 +2217,13 @@ void initServerConfig(void) {
     server.dynamic_hz = CONFIG_DEFAULT_DYNAMIC_HZ;
     server.arch_bits = (sizeof(long) == 8) ? 64 : 32;
     server.port = CONFIG_DEFAULT_SERVER_PORT;
+    server.tls_port = CONFIG_DEFAULT_SERVER_TLS_PORT;
     server.tcp_backlog = CONFIG_DEFAULT_TCP_BACKLOG;
     server.bindaddr_count = 0;
     server.unixsocket = NULL;
     server.unixsocketperm = CONFIG_DEFAULT_UNIX_SOCKET_PERM;
     server.ipfd_count = 0;
+    server.tlsfd_count = 0;
     server.sofd = -1;
     server.protected_mode = CONFIG_DEFAULT_PROTECTED_MODE;
     server.gopher_enabled = CONFIG_DEFAULT_GOPHER_ENABLED;
@@ -2734,6 +2736,11 @@ void initServer(void) {
     server.clients_paused = 0;
     server.system_memory_size = zmalloc_get_memory_size();
 
+    if (server.tls_port && tlsConfigureServer() == C_ERR) {
+        serverLog(LL_WARNING, "Failed to configure TLS. Check logs for more info.");
+        exit(1);
+    }
+
     createSharedObjects();
     adjustOpenFilesLimit();
     server.el = aeCreateEventLoop(server.maxclients+CONFIG_FDSET_INCR);
@@ -2749,6 +2756,9 @@ void initServer(void) {
     if (server.port != 0 &&
         listenToPort(server.port,server.ipfd,&server.ipfd_count) == C_ERR)
         exit(1);
+    if (server.tls_port != 0 &&
+        listenToPort(server.tls_port,server.tlsfd,&server.tlsfd_count) == C_ERR)
+        exit(1);
 
     /* Open the listening Unix domain socket. */
     if (server.unixsocket != NULL) {
@@ -2763,7 +2773,7 @@ void initServer(void) {
     }
 
     /* Abort if there are no listening sockets at all. */
-    if (server.ipfd_count == 0 && server.sofd < 0) {
+    if (server.ipfd_count == 0 && server.tlsfd_count == 0 && server.sofd < 0) {
         serverLog(LL_WARNING, "Configured to not listen anywhere, exiting.");
         exit(1);
     }
@@ -2831,6 +2841,14 @@ void initServer(void) {
             {
                 serverPanic(
                     "Unrecoverable error creating server.ipfd file event.");
+            }
+    }
+    for (j = 0; j < server.tlsfd_count; j++) {
+        if (aeCreateFileEvent(server.el, server.tlsfd[j], AE_READABLE,
+            acceptTLSHandler,NULL) == AE_ERR)
+            {
+                serverPanic(
+                    "Unrecoverable error creating server.tlsfd file event.");
             }
     }
     if (server.sofd > 0 && aeCreateFileEvent(server.el,server.sofd,AE_READABLE,
@@ -4778,6 +4796,7 @@ int main(int argc, char **argv) {
     ACLInit(); /* The ACL subsystem must be initialized ASAP because the
                   basic networking code and client creation depends on it. */
     moduleInitModulesSystem();
+    tlsInit();
 
     /* Store the executable path and arguments in a safe place in order
      * to be able to restart the server later. */

@@ -286,6 +286,15 @@ void loadServerConfigFromString(char *config) {
             if (server.port < 0 || server.port > 65535) {
                 err = "Invalid port"; goto loaderr;
             }
+        } else if (!strcasecmp(argv[0],"tls-port") && argc == 2) {
+#ifdef USE_OPENSSL
+            server.tls_port = atoi(argv[1]);
+            if (server.port < 0 || server.port > 65535) {
+                err = "Invalid port"; goto loaderr;
+            }
+#else
+            err = "TLS not supported"; goto loaderr;
+#endif
         } else if (!strcasecmp(argv[0],"tcp-backlog") && argc == 2) {
             server.tcp_backlog = atoi(argv[1]);
             if (server.tcp_backlog < 0) {
@@ -791,6 +800,18 @@ void loadServerConfigFromString(char *config) {
                 err = sentinelHandleConfiguration(argv+1,argc-1);
                 if (err) goto loaderr;
             }
+        } else if (!strcasecmp(argv[0],"tls-cert-file") && argc == 2) {
+            zfree(server.tls_cert_file);
+            server.tls_cert_file = zstrdup(argv[1]);
+        } else if (!strcasecmp(argv[0],"tls-key-file") && argc == 2) {
+            zfree(server.tls_key_file);
+            server.tls_key_file = zstrdup(argv[1]);
+        } else if (!strcasecmp(argv[0],"tls-dh-params-file") && argc == 2) {
+            zfree(server.tls_dh_params_file);
+            server.tls_dh_params_file = zstrdup(argv[1]);
+        } else if (!strcasecmp(argv[0],"tls-ca-cert-file") && argc == 2) {
+            zfree(server.tls_ca_cert_file);
+            server.tls_ca_cert_file = zstrdup(argv[1]);
         } else {
             err = "Bad directive or wrong number of arguments"; goto loaderr;
         }
@@ -1234,6 +1255,44 @@ void configSetCommand(client *c) {
     } config_set_enum_field(
       "repl-diskless-load",server.repl_diskless_load,repl_diskless_load_enum) {
 
+    /* TLS fields. */
+    } config_set_special_field("tls-cert-file") {
+        if (tlsConfigure((char *) o->ptr, server.tls_key_file,
+                    server.tls_dh_params_file, server.tls_ca_cert_file) == C_ERR) {
+            addReplyError(c,
+                    "Unable to configure tls-cert-file. Check server logs.");
+            return;
+        }
+        zfree(server.tls_cert_file);
+        server.tls_cert_file = zstrdup(o->ptr);
+    } config_set_special_field("tls-key-file") {
+        if (tlsConfigure(server.tls_cert_file, (char *) o->ptr,
+                    server.tls_dh_params_file, server.tls_ca_cert_file) == C_ERR) {
+            addReplyError(c,
+                    "Unable to configure tls-key-file. Check server logs.");
+            return;
+        }
+        zfree(server.tls_key_file);
+        server.tls_key_file = zstrdup(o->ptr);
+    } config_set_special_field("tls-dh-params-file") {
+        if (tlsConfigure(server.tls_cert_file, server.tls_key_file,
+                    (char *) o->ptr, server.tls_ca_cert_file) == C_ERR) {
+            addReplyError(c,
+                    "Unable to configure tls-dh-params-file. Check server logs.");
+            return;
+        }
+        zfree(server.tls_dh_params_file);
+        server.tls_dh_params_file = zstrdup(o->ptr);
+    } config_set_special_field("tls-ca-cert-file") {
+        if (tlsConfigure(server.tls_cert_file, server.tls_key_file,
+                    server.tls_dh_params_file, (char *) o->ptr) == C_ERR) {
+            addReplyError(c,
+                    "Unable to configure tls-ca-cert-file. Check server logs.");
+            return;
+        }
+        zfree(server.tls_ca_cert_file);
+        server.tls_ca_cert_file = zstrdup(o->ptr);
+    
     /* Everyhing else is an error... */
     } config_set_else {
         addReplyErrorFormat(c,"Unsupported CONFIG parameter: %s",
@@ -1307,6 +1366,10 @@ void configGetCommand(client *c) {
     config_get_string_field("pidfile",server.pidfile);
     config_get_string_field("slave-announce-ip",server.slave_announce_ip);
     config_get_string_field("replica-announce-ip",server.slave_announce_ip);
+    config_get_string_field("tls-cert-file",server.tls_cert_file);
+    config_get_string_field("tls-key-file",server.tls_key_file);
+    config_get_string_field("tls-dh-params-file",server.tls_dh_params_file);
+    config_get_string_field("tls-ca-cert-file",server.tls_ca_cert_file);
 
     /* Numerical values */
     config_get_numerical_field("maxmemory",server.maxmemory);
@@ -1354,6 +1417,7 @@ void configGetCommand(client *c) {
     config_get_numerical_field("slowlog-max-len", server.slowlog_max_len);
     config_get_numerical_field("tracking-table-max-fill", server.tracking_table_max_fill);
     config_get_numerical_field("port",server.port);
+    config_get_numerical_field("tls-port",server.tls_port);
     config_get_numerical_field("cluster-announce-port",server.cluster_announce_port);
     config_get_numerical_field("cluster-announce-bus-port",server.cluster_announce_bus_port);
     config_get_numerical_field("tcp-backlog",server.tcp_backlog);
@@ -2113,7 +2177,7 @@ int rewriteConfig(char *path) {
     }
 
     rewriteConfigStringOption(state,"pidfile",server.pidfile,CONFIG_DEFAULT_PID_FILE);
-    rewriteConfigNumericalOption(state,"port",server.port,CONFIG_DEFAULT_SERVER_PORT);
+    rewriteConfigNumericalOption(state,"tls-port",server.tls_port,CONFIG_DEFAULT_SERVER_TLS_PORT);
     rewriteConfigNumericalOption(state,"cluster-announce-port",server.cluster_announce_port,CONFIG_DEFAULT_CLUSTER_ANNOUNCE_PORT);
     rewriteConfigNumericalOption(state,"cluster-announce-bus-port",server.cluster_announce_bus_port,CONFIG_DEFAULT_CLUSTER_ANNOUNCE_BUS_PORT);
     rewriteConfigNumericalOption(state,"tcp-backlog",server.tcp_backlog,CONFIG_DEFAULT_TCP_BACKLOG);
@@ -2195,6 +2259,10 @@ int rewriteConfig(char *path) {
     rewriteConfigNumericalOption(state,"hz",server.config_hz,CONFIG_DEFAULT_HZ);
     rewriteConfigEnumOption(state,"supervised",server.supervised_mode,supervised_mode_enum,SUPERVISED_NONE);
     rewriteConfigNumericalOption(state,"rdb-key-save-delay",server.rdb_key_save_delay,CONFIG_DEFAULT_RDB_KEY_SAVE_DELAY);
+    rewriteConfigStringOption(state,"tls-cert-file",server.tls_cert_file,NULL);
+    rewriteConfigStringOption(state,"tls-key-file",server.tls_key_file,NULL);
+    rewriteConfigStringOption(state,"tls-dh-params-file",server.tls_dh_params_file,NULL);
+    rewriteConfigStringOption(state,"tls-ca-cert-file",server.tls_ca_cert_file,NULL);
 
     /* Rewrite Sentinel config if in Sentinel mode. */
     if (server.sentinel_mode) rewriteConfigSentinelOption(state);

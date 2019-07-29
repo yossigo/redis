@@ -85,6 +85,7 @@ typedef long long mstime_t; /* millisecond time type. */
 #define CONFIG_MAX_HZ            500
 #define MAX_CLIENTS_PER_CLOCK_TICK 200          /* HZ is adapted based on that. */
 #define CONFIG_DEFAULT_SERVER_PORT        6379  /* TCP port. */
+#define CONFIG_DEFAULT_SERVER_TLS_PORT    0     /* TCP port. */
 #define CONFIG_DEFAULT_TCP_BACKLOG       511    /* TCP listen backlog. */
 #define CONFIG_DEFAULT_CLIENT_TIMEOUT       0   /* Default client timeout: infinite */
 #define CONFIG_DEFAULT_DBNUM     16
@@ -1069,6 +1070,7 @@ struct redisServer {
                                    to be processed. */
     /* Networking */
     int port;                   /* TCP listening port */
+    int tls_port;               /* TLS listening port */
     int tcp_backlog;            /* TCP listen() backlog */
     char *bindaddr[CONFIG_BINDADDR_MAX]; /* Addresses we should bind to */
     int bindaddr_count;         /* Number of addresses in server.bindaddr[] */
@@ -1076,6 +1078,8 @@ struct redisServer {
     mode_t unixsocketperm;      /* UNIX socket permission */
     int ipfd[CONFIG_BINDADDR_MAX]; /* TCP socket file descriptors */
     int ipfd_count;             /* Used slots in ipfd[] */
+    int tlsfd[CONFIG_BINDADDR_MAX]; /* TLS socket file descriptors */
+    int tlsfd_count;            /* Used slots in tlsfd[] */
     int sofd;                   /* Unix socket file descriptor */
     int cfd[CONFIG_BINDADDR_MAX];/* Cluster bus listening socket */
     int cfd_count;              /* Used slots in cfd[] */
@@ -1401,6 +1405,11 @@ struct redisServer {
     int watchdog_period;  /* Software watchdog period in ms. 0 = off */
     /* System hardware info */
     size_t system_memory_size;  /* Total memory in system as reported by OS */
+    /* TLS Configuration */
+    char *tls_cert_file;
+    char *tls_key_file;
+    char *tls_dh_params_file;
+    char *tls_ca_cert_file;
 };
 
 typedef struct pubsubPattern {
@@ -1560,6 +1569,7 @@ void processInputBufferAndReplicate(client *c);
 void processGopherRequest(client *c);
 void acceptHandler(aeEventLoop *el, int fd, void *privdata, int mask);
 void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask);
+void acceptTLSHandler(aeEventLoop *el, int fd, void *privdata, int mask);
 void acceptUnixHandler(aeEventLoop *el, int fd, void *privdata, int mask);
 void readQueryFromClient(connection *conn);
 void addReplyNull(client *c);
@@ -2332,6 +2342,12 @@ int memtest_preserving_test(unsigned long *m, size_t bytes, int passes);
 void mixDigest(unsigned char *digest, void *ptr, size_t len);
 void xorDigest(unsigned char *digest, void *ptr, size_t len);
 int populateCommandTableParseFlags(struct redisCommand *c, char *strflags);
+
+/* TLS stuff */
+void tlsInit(void);
+int tlsConfigureServer(void);
+int tlsConfigure(const char *cert_file, const char *key_file,
+        const char *dh_params_file, const char *ca_cert_file);
 
 #define redisDebug(fmt, ...) \
     printf("DEBUG %s:%d > " fmt "\n", __FILE__, __LINE__, __VA_ARGS__)

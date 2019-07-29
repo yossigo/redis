@@ -145,6 +145,10 @@ static inline const char *connGetLastError(connection *conn) {
 
 connection *connCreateSocket();
 connection *connCreateAcceptedSocket(int fd);
+
+connection *connCreateTLS();
+connection *connCreateAcceptedTLS(int fd);
+
 void connSetPrivateData(connection *conn, void *data);
 void *connGetPrivateData(connection *conn);
 int connGetState(connection *conn);

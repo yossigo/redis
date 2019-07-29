@@ -1,0 +1,514 @@
+/*
+ * Copyright (c) 2019, Redis Labs
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ *   * Redistributions of source code must retain the above copyright notice,
+ *     this list of conditions and the following disclaimer.
+ *   * Redistributions in binary form must reproduce the above copyright
+ *     notice, this list of conditions and the following disclaimer in the
+ *     documentation and/or other materials provided with the distribution.
+ *   * Neither the name of Redis nor the names of its contributors may be used
+ *     to endorse or promote products derived from this software without
+ *     specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ */
+
+
+#include "server.h"
+
+#ifdef USE_OPENSSL
+
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#include <openssl/rand.h>
+
+SSL_CTX *tls_ctx;
+
+
+/* TODO: this is just hard coded POC stuff, should be replaced with configuration/
+ * reconfiguration etc.
+ */
+void tlsInit(void) {
+    ERR_load_crypto_strings();
+    SSL_load_error_strings();
+    SSL_library_init();
+
+    if (!RAND_poll()) {
+        serverLog(LL_WARNING, "OpenSSL: Failed to seed random number generator.");
+    }
+}
+
+int tlsConfigureServer(void) {
+    return tlsConfigure(server.tls_cert_file, server.tls_key_file,
+            server.tls_dh_params_file, server.tls_ca_cert_file);
+}
+
+int tlsConfigure(const char *cert_file, const char *key_file,
+        const char *dh_params_file, const char *ca_cert_file) {
+
+    char errbuf[256];
+    SSL_CTX *ctx = NULL;
+
+    if (!cert_file) {
+        serverLog(LL_WARNING, "No tls-cert-file configured!");
+        goto error;
+    }
+
+    if (!key_file) {
+        serverLog(LL_WARNING, "No tls-key-file configured!");
+        goto error;
+    }
+
+    if (!ca_cert_file) {
+        serverLog(LL_WARNING, "No tls-ca-cert-file configured!");
+        goto error;
+    }
+
+    ctx = SSL_CTX_new(TLS_method());
+    SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL);
+    SSL_CTX_set_ecdh_auto(ctx, 1);
+
+    if (SSL_CTX_use_certificate_file(ctx, cert_file, SSL_FILETYPE_PEM) <= 0) {
+        ERR_error_string_n(ERR_get_error(), errbuf, sizeof(errbuf));
+        serverLog(LL_WARNING, "Failed to load certificate: %s: %s", cert_file, errbuf);
+        goto error;
+    }
+        
+    if (SSL_CTX_use_PrivateKey_file(ctx, key_file, SSL_FILETYPE_PEM) <= 0) {
+        ERR_error_string_n(ERR_get_error(), errbuf, sizeof(errbuf));
+        serverLog(LL_WARNING, "Failed to load private key: %s: %s", key_file, errbuf);
+        goto error;
+    }
+    
+    if (SSL_CTX_load_verify_locations(ctx, ca_cert_file, NULL) <= 0) {
+        ERR_error_string_n(ERR_get_error(), errbuf, sizeof(errbuf));
+        serverLog(LL_WARNING, "Failed to load CA certificate(s) file: %s: %s", ca_cert_file, errbuf);
+        goto error;
+    }
+
+    if (dh_params_file) {
+        FILE *dhfile = fopen(dh_params_file, "r");
+        DH *dh = NULL;
+        if (!dhfile) {
+            serverLog(LL_WARNING, "Failed to load %s: %s", dh_params_file, strerror(errno));
+            goto error;
+        }
+
+        dh = PEM_read_DHparams(dhfile, NULL, NULL, NULL);
+        fclose(dhfile);
+        if (!dh) {
+            serverLog(LL_WARNING, "%s: failed to read DH params.", dh_params_file);
+            goto error;
+        }
+
+        if (SSL_CTX_set_tmp_dh(ctx, dh) <= 0) {
+            ERR_error_string_n(ERR_get_error(), errbuf, sizeof(errbuf));
+            serverLog(LL_WARNING, "Failed to load DH params file: %s: %s", dh_params_file, errbuf);
+            DH_free(dh);
+            goto error;
+        }
+
+        DH_free(dh);
+    }
+
+    SSL_CTX_free(tls_ctx);
+    tls_ctx = ctx;
+
+    return C_OK;
+
+error:
+    if (ctx) SSL_CTX_free(ctx);
+    return C_ERR;
+}
+
+static inline void enterHandler(connection *conn) {
+    conn->flags |= CONN_FLAG_IN_HANDLER;
+}
+
+static inline int exitHandler(connection *conn) {
+    conn->flags &= ~CONN_FLAG_IN_HANDLER;
+    if (conn->flags & CONN_FLAG_CLOSE_SCHEDULED) {
+        connClose(conn);
+        return 0;
+    }
+    return 1;
+}
+
+#define CALL_HANDLER(conn, handler) \
+    enterHandler(conn); \
+    if (conn->handler) conn->handler(conn); \
+    if (!exitHandler(conn)) return;
+
+#define TLSCONN_DEBUG(fmt, ...) \
+    serverLog(LL_DEBUG, "TLSCONN: " fmt, __VA_ARGS__)
+
+extern SSL_CTX *tls_ctx;
+
+ConnectionType CT_TLS;
+
+/* Normal socket connections have a simple events/handler correlation.
+ *
+ * With TLS connections we need to handle cases where during a logical read
+ * or write operation, the SSL library asks to block for the opposite
+ * socket operation.
+ *
+ * When this happens, we need to do two things:
+ * 1. Make sure we register for the even.
+ * 2. Make sure we know which handler needs to execute when the
+ *    event fires.  That is, if we notify the caller of a write operation
+ *    that it blocks, and SSL asks for a read, we need to trigger the
+ *    write handler again on the next read event.
+ *
+ */
+
+typedef enum {
+    WANT_READ = 1,
+    WANT_WRITE
+} WantIOType;
+
+#define TLS_CONN_FLAG_READ_WANT_WRITE   (1<<0)
+#define TLS_CONN_FLAG_WRITE_WANT_READ   (1<<1)
+
+typedef struct tls_connection {
+    connection c;
+    int flags;
+    SSL *ssl;
+    char *ssl_error;
+} tls_connection;
+
+connection *connCreateTLS(void) {
+    tls_connection *conn = zcalloc(sizeof(tls_connection));
+    conn->c.type = &CT_TLS;
+    conn->c.fd = -1;
+    conn->ssl = SSL_new(tls_ctx);
+    return (connection *) conn;
+}
+
+connection *connCreateAcceptedTLS(int fd) {
+    tls_connection *conn = (tls_connection *) connCreateTLS();
+    conn->c.fd = fd;
+    conn->c.state = CONN_STATE_ACCEPTING;
+
+    SSL_set_fd(conn->ssl, conn->c.fd);
+    SSL_set_accept_state(conn->ssl);
+
+    return (connection *) conn;
+}
+
+static void tlsEventHandler(struct aeEventLoop *el, int fd, void *clientData, int mask);
+
+static int handleSSLReturnCode(tls_connection *conn, int ret_value, WantIOType *want) {
+    if (ret_value <= 0) {
+        int ssl_err = SSL_get_error(conn->ssl, ret_value);
+
+        switch (ssl_err) {
+            case SSL_ERROR_WANT_WRITE:
+                *want = WANT_WRITE;
+                return C_OK;
+            case SSL_ERROR_WANT_READ:
+                *want = WANT_READ;
+                return C_OK;
+            case SSL_ERROR_SYSCALL:
+                if (conn->ssl_error) zfree(conn->ssl_error);
+                conn->ssl_error = zstrdup(strerror(errno));
+                return C_ERR;
+            default:
+                /* Error! */
+                if (conn->ssl_error) zfree(conn->ssl_error);
+                conn->ssl_error = zmalloc(512);
+                ERR_error_string_n(ERR_get_error(), conn->ssl_error, 512);
+                return C_ERR;
+        }
+    }
+
+    return C_OK;
+}
+
+void registerSSLEvent(tls_connection *conn, WantIOType want) {
+    int mask = aeGetFileEvents(server.el, conn->c.fd);
+
+    switch (want) {
+        case WANT_READ:
+            if (mask & AE_WRITABLE) aeDeleteFileEvent(server.el, conn->c.fd, AE_WRITABLE);
+            if (!(mask & AE_READABLE)) aeCreateFileEvent(server.el, conn->c.fd, AE_READABLE,
+                        tlsEventHandler, conn);
+            break;
+        case WANT_WRITE:
+            if (mask & AE_READABLE) aeDeleteFileEvent(server.el, conn->c.fd, AE_READABLE);
+            if (!(mask & AE_WRITABLE)) aeCreateFileEvent(server.el, conn->c.fd, AE_WRITABLE,
+                        tlsEventHandler, conn);
+            break;
+        default:
+            serverAssert(0);
+            break;
+    }
+}
+
+void updateSSLEvent(tls_connection *conn) {
+    int mask = aeGetFileEvents(server.el, conn->c.fd);
+    int need_read = conn->c.read_handler || (conn->flags & TLS_CONN_FLAG_WRITE_WANT_READ);
+    int need_write = conn->c.write_handler || (conn->flags & TLS_CONN_FLAG_READ_WANT_WRITE);
+
+    if (need_read && !(mask & AE_READABLE))
+        aeCreateFileEvent(server.el, conn->c.fd, AE_READABLE, tlsEventHandler, conn);
+    if (!need_read && (mask & AE_READABLE))
+        aeDeleteFileEvent(server.el, conn->c.fd, AE_READABLE);
+
+    if (need_write && !(mask & AE_WRITABLE))
+        aeCreateFileEvent(server.el, conn->c.fd, AE_WRITABLE, tlsEventHandler, conn);
+    if (!need_write && (mask & AE_WRITABLE))
+        aeDeleteFileEvent(server.el, conn->c.fd, AE_WRITABLE);
+}
+
+
+static void tlsEventHandler(struct aeEventLoop *el, int fd, void *clientData, int mask) {
+    UNUSED(el);
+    UNUSED(fd);
+    tls_connection *conn = clientData;
+    int ret;
+
+    TLSCONN_DEBUG("tlsEventHandler(): fd=%d, mask=%d, r=%d, w=%d, flags=%d",
+            fd, mask, conn->c.read_handler != NULL, conn->c.write_handler != NULL,
+            conn->flags);
+
+    switch (conn->c.state) {
+        case CONN_STATE_CONNECTING:
+            if (connGetSocketError((connection *) conn)) {
+                conn->c.last_errno = errno;
+                conn->c.state = CONN_STATE_ERROR;
+            } else {
+                SSL_set_fd(conn->ssl, conn->c.fd);
+                ret = SSL_connect(conn->ssl);
+                if (ret <= 0) {
+                    WantIOType want = 0;
+                    if (handleSSLReturnCode(conn, ret, &want) == C_OK) {
+                        registerSSLEvent(conn, want);
+                        break;
+                    }
+
+                    /* If not handled, it's an error */
+                    conn->c.state = CONN_STATE_ERROR;
+                } else {
+                    conn->c.state = CONN_STATE_CONNECTED;
+                }
+            }
+
+            CALL_HANDLER(((connection *) conn), conn_handler);
+            conn->c.conn_handler = NULL;
+            break;
+        case CONN_STATE_ACCEPTING:
+            ret = SSL_accept(conn->ssl);
+            if (ret <= 0) {
+                WantIOType want = 0;
+                if (handleSSLReturnCode(conn, ret, &want) == C_OK) {
+                    registerSSLEvent(conn, want);
+                    break;
+                }
+
+                /* If not handled, it's an error */
+                conn->c.state = CONN_STATE_ERROR;
+            } else {
+                conn->c.state = CONN_STATE_CONNECTED;
+            }
+
+            CALL_HANDLER(((connection *) conn), conn_handler);
+            conn->c.conn_handler = NULL;
+            break;
+
+        case CONN_STATE_CONNECTED:
+            if ((mask & AE_READABLE) && (conn->flags & TLS_CONN_FLAG_WRITE_WANT_READ)) {
+                serverLog(LL_DEBUG, "WRITE_WNAT_READ");
+                conn->flags &= ~TLS_CONN_FLAG_WRITE_WANT_READ;
+                CALL_HANDLER(((connection *) conn), write_handler);
+            }
+
+            if ((mask & AE_WRITABLE) && (conn->flags & TLS_CONN_FLAG_READ_WANT_WRITE)) {
+                serverLog(LL_DEBUG, "READ_WANT_WRITE");
+                conn->flags &= ~TLS_CONN_FLAG_READ_WANT_WRITE;
+                CALL_HANDLER(((connection *) conn), read_handler);
+            }
+
+            if ((mask & AE_READABLE) && conn->c.read_handler) {
+                CALL_HANDLER(((connection *)conn), read_handler);
+            }
+
+            if ((mask & AE_WRITABLE) && conn->c.write_handler) {
+                CALL_HANDLER(((connection *) conn), write_handler);
+            }
+            break;
+        default:
+            break;
+    }
+
+    updateSSLEvent(conn);
+}
+
+static void connTLSClose(connection *conn_) {
+    tls_connection *conn = (tls_connection *) conn_;
+
+    if (conn->ssl) {
+        SSL_free(conn->ssl);
+        conn->ssl = NULL;
+    }
+
+    if (conn->ssl_error) {
+        zfree(conn->ssl_error);
+        conn->ssl_error = NULL;
+    }
+
+    CT_Socket.close(conn_);
+}
+
+static int connTLSAccept(connection *_conn, ConnectionCallbackFunc accept_handler) {
+    tls_connection *conn = (tls_connection *) _conn;
+    int ret;
+
+    if (conn->c.state != CONN_STATE_ACCEPTING) return C_ERR;
+
+    /* Try to accept */
+    conn->c.conn_handler = accept_handler;
+    ret = SSL_accept(conn->ssl);
+
+    if (ret <= 0) {
+        WantIOType want = 0;
+        if (handleSSLReturnCode(conn, ret, &want) == C_OK) {
+            registerSSLEvent(conn, want);   /* We'll fire back */
+            return C_OK;
+        } else {
+            conn->c.state = CONN_STATE_ERROR;
+            return C_ERR;
+        }
+    }
+
+    /* Unlikely to ever reach here! */ 
+    serverAssert(0);
+    return C_OK;
+}
+
+static int connTLSConnect(connection *conn_, const char *addr, int port, const char *src_addr, ConnectionCallbackFunc connect_handler) {
+    tls_connection *conn = (tls_connection *) conn_;
+
+    if (conn->c.state != CONN_STATE_NONE) return C_ERR;
+
+    /* Initiate Socket connection first */
+    if (CT_Socket.connect(conn_, addr, port, src_addr, connect_handler) == C_ERR) return C_ERR;
+
+    /* Return now, once the socket is connected we'll initiate
+     * TLS connection from the event handler.
+     */
+    return C_OK;
+}
+
+static int connTLSWrite(connection *conn_, const void *data, size_t data_len) {
+    tls_connection *conn = (tls_connection *) conn_;
+    int ret;
+
+    if (conn->c.state != CONN_STATE_CONNECTED) return -1;
+    ret = SSL_write(conn->ssl, data, data_len);
+
+    if (ret <= 0) {
+        WantIOType want = 0;
+        if (handleSSLReturnCode(conn, ret, &want) == C_OK) {
+            if (want == WANT_READ) conn->flags |= TLS_CONN_FLAG_WRITE_WANT_READ;
+            updateSSLEvent(conn);
+            errno = EAGAIN;
+            return -1;
+        } else {
+            conn->c.state = CONN_STATE_ERROR;
+            return -1;
+        }
+    }
+
+    return ret;
+}
+
+static int connTLSRead(connection *conn_, void *buf, size_t buf_len) {
+    tls_connection *conn = (tls_connection *) conn_;
+    int ret;
+
+    if (conn->c.state != CONN_STATE_CONNECTED) return -1;
+    ret = SSL_read(conn->ssl, buf, buf_len);
+    if (ret <= 0) {
+        WantIOType want = 0;
+        if (handleSSLReturnCode(conn, ret, &want) == C_OK) {
+            if (want == WANT_WRITE) conn->flags |= TLS_CONN_FLAG_READ_WANT_WRITE;
+            updateSSLEvent(conn);
+
+            errno = EAGAIN;
+            return -1;
+        } else {
+            conn->c.state = CONN_STATE_ERROR;
+            return -1;
+        }
+    }
+
+    return ret;
+}
+
+static const char *connTLSGetLastError(connection *conn_) {
+    tls_connection *conn = (tls_connection *) conn_;
+
+    if (conn->ssl_error) return conn->ssl_error;
+    return NULL;
+}
+
+int connTLSSetWriteHandler(connection *conn, ConnectionCallbackFunc func) {
+    conn->write_handler = func;
+    updateSSLEvent((tls_connection *) conn);
+    return C_OK;
+}
+
+int connTLSSetReadHandler(connection *conn, ConnectionCallbackFunc func) {
+    conn->read_handler = func;
+    updateSSLEvent((tls_connection *) conn);
+    return C_OK;
+}
+
+
+ConnectionType CT_TLS = {
+    .ae_handler = tlsEventHandler,
+    .accept = connTLSAccept,
+    .connect = connTLSConnect,
+    .read = connTLSRead,
+    .write = connTLSWrite,
+    .close = connTLSClose,
+    .set_write_handler = connTLSSetWriteHandler,
+    .set_read_handler = connTLSSetReadHandler,
+    .get_last_error = connTLSGetLastError
+};
+
+#else   /* USE_OPENSSL */
+
+void tlsInit(void) {
+}
+
+int tlsConfigure(const char *cert_file, const char *key_file,
+        const char *dh_params_file, const char *ca_cert_file) {
+    return C_OK;
+}
+
+connection *connCreateTLS(void) { 
+    return NULL;
+}
+
+connection *connCreateAcceptedTLS(int fd) {
+    UNUSED(fd);
+
+    return NULL;
+}
+
+#endif
