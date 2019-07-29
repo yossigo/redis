@@ -36,7 +36,7 @@
 #include <openssl/err.h>
 #include <openssl/rand.h>
 
-SSL_CTX *tls_ctx;
+static SSL_CTX *tls_ctx;
 
 
 /* TODO: this is just hard coded POC stuff, should be replaced with configuration/
@@ -148,15 +148,19 @@ static inline int exitHandler(connection *conn) {
     return 1;
 }
 
-#define CALL_HANDLER(conn, handler) \
-    enterHandler(conn); \
-    if (conn->handler) conn->handler(conn); \
-    if (!exitHandler(conn)) return;
+static inline int callHandler(connection *conn, ConnectionCallbackFunc handler) {
+    conn->flags |= CONN_FLAG_IN_HANDLER;
+    if (handler) handler(conn);
+    conn->flags &= ~CONN_FLAG_IN_HANDLER;
+    if (conn->flags & CONN_FLAG_CLOSE_SCHEDULED) {
+        connClose(conn);
+        return 0;
+    }
+    return 1;
+}
 
 #define TLSCONN_DEBUG(fmt, ...) \
     serverLog(LL_DEBUG, "TLSCONN: " fmt, __VA_ARGS__)
-
-extern SSL_CTX *tls_ctx;
 
 ConnectionType CT_TLS;
 
@@ -307,7 +311,7 @@ static void tlsEventHandler(struct aeEventLoop *el, int fd, void *clientData, in
                 }
             }
 
-            CALL_HANDLER(((connection *) conn), conn_handler);
+            if (!callHandler((connection *) conn, conn->c.conn_handler)) return;
             conn->c.conn_handler = NULL;
             break;
         case CONN_STATE_ACCEPTING:
@@ -325,29 +329,26 @@ static void tlsEventHandler(struct aeEventLoop *el, int fd, void *clientData, in
                 conn->c.state = CONN_STATE_CONNECTED;
             }
 
-            CALL_HANDLER(((connection *) conn), conn_handler);
+            if (!callHandler((connection *) conn, conn->c.conn_handler)) return;
             conn->c.conn_handler = NULL;
             break;
-
         case CONN_STATE_CONNECTED:
             if ((mask & AE_READABLE) && (conn->flags & TLS_CONN_FLAG_WRITE_WANT_READ)) {
-                serverLog(LL_DEBUG, "WRITE_WNAT_READ");
                 conn->flags &= ~TLS_CONN_FLAG_WRITE_WANT_READ;
-                CALL_HANDLER(((connection *) conn), write_handler);
+                if (!callHandler((connection *) conn, conn->c.write_handler)) return;
             }
 
             if ((mask & AE_WRITABLE) && (conn->flags & TLS_CONN_FLAG_READ_WANT_WRITE)) {
-                serverLog(LL_DEBUG, "READ_WANT_WRITE");
                 conn->flags &= ~TLS_CONN_FLAG_READ_WANT_WRITE;
-                CALL_HANDLER(((connection *) conn), read_handler);
+                if (!callHandler((connection *) conn, conn->c.read_handler)) return;
             }
 
             if ((mask & AE_READABLE) && conn->c.read_handler) {
-                CALL_HANDLER(((connection *)conn), read_handler);
+                if (!callHandler((connection *) conn, conn->c.read_handler)) return;
             }
 
             if ((mask & AE_WRITABLE) && conn->c.write_handler) {
-                CALL_HANDLER(((connection *) conn), write_handler);
+                if (!callHandler((connection *) conn, conn->c.write_handler)) return;
             }
             break;
         default:
@@ -394,8 +395,10 @@ static int connTLSAccept(connection *_conn, ConnectionCallbackFunc accept_handle
         }
     }
 
-    /* Unlikely to ever reach here! */ 
-    serverAssert(0);
+    conn->c.state = CONN_STATE_CONNECTED;
+    if (!callHandler((connection *) conn, conn->c.conn_handler)) return C_OK;
+    conn->c.conn_handler = NULL;
+
     return C_OK;
 }
 
