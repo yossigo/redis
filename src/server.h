@@ -1406,6 +1406,7 @@ struct redisServer {
     /* System hardware info */
     size_t system_memory_size;  /* Total memory in system as reported by OS */
     /* TLS Configuration */
+    int tls_cluster;
     char *tls_cert_file;
     char *tls_key_file;
     char *tls_dh_params_file;

@@ -659,7 +659,7 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         }
 
-        connection *conn = connCreateAcceptedSocket(cfd);
+        connection *conn = server.tls_cluster ? connCreateAcceptedTLS(cfd) : connCreateAcceptedSocket(cfd);
         connNonBlock(conn);
         connEnableTcpNoDelay(conn);
 
@@ -3453,7 +3453,7 @@ void clusterCron(void) {
 
         if (node->link == NULL) {
             clusterLink *link = createClusterLink(node);
-            link->conn = connCreateSocket();
+            link->conn = server.tls_cluster ? connCreateTLS() : connCreateSocket();
             connSetPrivateData(link->conn, link);
             if (connConnect(link->conn, node->ip, node->cport, NET_FIRST_BIND_ADDR,
                         clusterLinkConnectHandler) == -1) {
@@ -5024,7 +5024,7 @@ migrateCachedSocket* migrateGetSocket(client *c, robj *host, robj *port, long ti
     }
 
     /* Create the socket */
-    conn = connCreateSocket();
+    conn = server.tls_cluster ? connCreateTLS() : connCreateSocket();
     if (connBlockingConnect(conn, c->argv[1]->ptr, atoi(c->argv[2]->ptr), timeout)
             != C_OK) {
         addReplySds(c,

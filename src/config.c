@@ -812,6 +812,8 @@ void loadServerConfigFromString(char *config) {
         } else if (!strcasecmp(argv[0],"tls-ca-cert-file") && argc == 2) {
             zfree(server.tls_ca_cert_file);
             server.tls_ca_cert_file = zstrdup(argv[1]);
+        } else if (!strcasecmp(argv[0],"tls-cluster") && argc == 2) {
+            server.tls_cluster = yesnotoi(argv[1]);
         } else {
             err = "Bad directive or wrong number of arguments"; goto loaderr;
         }
@@ -1370,6 +1372,7 @@ void configGetCommand(client *c) {
     config_get_string_field("tls-key-file",server.tls_key_file);
     config_get_string_field("tls-dh-params-file",server.tls_dh_params_file);
     config_get_string_field("tls-ca-cert-file",server.tls_ca_cert_file);
+    config_get_bool_field("tls-cluster",server.tls_cluster);
 
     /* Numerical values */
     config_get_numerical_field("maxmemory",server.maxmemory);
@@ -2181,6 +2184,7 @@ int rewriteConfig(char *path) {
     rewriteConfigNumericalOption(state,"cluster-announce-port",server.cluster_announce_port,CONFIG_DEFAULT_CLUSTER_ANNOUNCE_PORT);
     rewriteConfigNumericalOption(state,"cluster-announce-bus-port",server.cluster_announce_bus_port,CONFIG_DEFAULT_CLUSTER_ANNOUNCE_BUS_PORT);
     rewriteConfigNumericalOption(state,"tcp-backlog",server.tcp_backlog,CONFIG_DEFAULT_TCP_BACKLOG);
+    rewriteConfigYesNoOption(state,"tls-cluster",server.tls_cluster,0);
     rewriteConfigBindOption(state);
     rewriteConfigStringOption(state,"unixsocket",server.unixsocket,NULL);
     rewriteConfigOctalOption(state,"unixsocketperm",server.unixsocketperm,CONFIG_DEFAULT_UNIX_SOCKET_PERM);
