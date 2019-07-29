@@ -481,17 +481,107 @@ int connTLSSetReadHandler(connection *conn, ConnectionCallbackFunc func) {
     return C_OK;
 }
 
+static void setBlockingTimeout(tls_connection *conn, long long timeout) {
+    anetBlock(NULL, conn->c.fd);
+    anetSendTimeout(NULL, conn->c.fd, timeout);
+    anetRecvTimeout(NULL, conn->c.fd, timeout);
+}
+
+static void unsetBlockingTimeout(tls_connection *conn) {
+    anetNonBlock(NULL, conn->c.fd);
+    anetSendTimeout(NULL, conn->c.fd, 0);
+    anetRecvTimeout(NULL, conn->c.fd, 0);
+}
+
+static int connTLSBlockingConnect(connection *conn_, const char *addr, int port, long long timeout) {
+    tls_connection *conn = (tls_connection *) conn_;
+    int ret;
+
+    if (conn->c.state != CONN_STATE_NONE) return C_ERR;
+
+    /* Initiate socket blocking connect first */
+    if (CT_Socket.blocking_connect(conn_, addr, port, timeout) == C_ERR) return C_ERR;
+
+    /* Initiate TLS connection now.  We set up a send/recv timeout on the socket,
+     * which means the specified timeout will not be enforced accurately. */
+    SSL_set_fd(conn->ssl, conn->c.fd);
+    setBlockingTimeout(conn, timeout);
+
+    if ((ret = SSL_connect(conn->ssl)) <= 0) {
+        conn->c.state = CONN_STATE_ERROR;
+        return C_ERR;
+    }
+    unsetBlockingTimeout(conn);
+
+    conn->c.state = CONN_STATE_CONNECTED;
+    return C_OK;
+}
+
+static ssize_t connTLSSyncWrite(connection *conn_, char *ptr, ssize_t size, long long timeout) {
+    tls_connection *conn = (tls_connection *) conn_;
+
+    setBlockingTimeout(conn, timeout);
+    int ret = SSL_write(conn->ssl, ptr, size);
+    unsetBlockingTimeout(conn);
+
+    return ret;
+}
+
+static ssize_t connTLSSyncRead(connection *conn_, char *ptr, ssize_t size, long long timeout) {
+    tls_connection *conn = (tls_connection *) conn_;
+
+    setBlockingTimeout(conn, timeout);
+    int ret = SSL_read(conn->ssl, ptr, size);
+    unsetBlockingTimeout(conn);
+
+    return ret;
+}
+
+static ssize_t connTLSSyncReadLine(connection *conn_, char *ptr, ssize_t size, long long timeout) {
+    tls_connection *conn = (tls_connection *) conn_;
+    ssize_t nread = 0;
+
+    setBlockingTimeout(conn, timeout);
+
+    size--;
+    while(size) {
+        char c;
+
+        if (SSL_read(conn->ssl,&c,1) <= 0) {
+            nread = -1;
+            goto exit;
+        }
+        if (c == '\n') {
+            *ptr = '\0';
+            if (nread && *(ptr-1) == '\r') *(ptr-1) = '\0';
+            goto exit;
+        } else {
+            *ptr++ = c;
+            *ptr = '\0';
+            nread++;
+        }
+        size--;
+    }
+exit:
+    unsetBlockingTimeout(conn);
+    return nread;
+}
+
 
 ConnectionType CT_TLS = {
     .ae_handler = tlsEventHandler,
     .accept = connTLSAccept,
     .connect = connTLSConnect,
+    .blocking_connect = connTLSBlockingConnect,
     .read = connTLSRead,
     .write = connTLSWrite,
     .close = connTLSClose,
     .set_write_handler = connTLSSetWriteHandler,
     .set_read_handler = connTLSSetReadHandler,
-    .get_last_error = connTLSGetLastError
+    .get_last_error = connTLSGetLastError,
+    .sync_write = connTLSSyncWrite,
+    .sync_read = connTLSSyncRead,
+    .sync_readline = connTLSSyncReadLine,
 };
 
 #else   /* USE_OPENSSL */

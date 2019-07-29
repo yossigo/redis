@@ -60,6 +60,10 @@ typedef struct ConnectionType {
     int (*set_write_handler)(struct connection *conn, ConnectionCallbackFunc handler);
     int (*set_read_handler)(struct connection *conn, ConnectionCallbackFunc handler);
     const char *(*get_last_error)(struct connection *conn);
+    int (*blocking_connect)(struct connection *conn, const char *addr, int port, long long timeout);
+    ssize_t (*sync_write)(struct connection *conn, char *ptr, ssize_t size, long long timeout);
+    ssize_t (*sync_read)(struct connection *conn, char *ptr, ssize_t size, long long timeout);
+    ssize_t (*sync_readline)(struct connection *conn, char *ptr, ssize_t size, long long timeout);
 } ConnectionType;
 
 extern ConnectionType CT_Socket;
@@ -105,6 +109,16 @@ static inline int connConnect(connection *conn, const char *addr, int port, cons
     return conn->type->connect(conn, addr, port, src_addr, connect_handler);
 }
 
+/* Blocking connect.
+ *
+ * NOTE: This is implemented in order to simplify the transition to the abstract
+ * connections, but should probably be refactored out of cluster.c and replication.c,
+ * in favor of a pure async implementation.
+ */
+static inline int connBlockingConnect(connection *conn, const char *addr, int port, long long timeout) {
+    return conn->type->blocking_connect(conn, addr, port, timeout);
+}
+
 /* Write to connection, behaves the same as write(2).
  */
 static inline int connWrite(connection *conn, const void *data, size_t data_len) {
@@ -143,6 +157,18 @@ static inline const char *connGetLastError(connection *conn) {
     return conn->type->get_last_error(conn);
 }
 
+static inline ssize_t connSyncWrite(connection *conn, char *ptr, ssize_t size, long long timeout) {
+    return conn->type->sync_write(conn, ptr, size, timeout);
+}
+
+static inline ssize_t connSyncRead(connection *conn, char *ptr, ssize_t size, long long timeout) {
+    return conn->type->sync_read(conn, ptr, size, timeout);
+}
+
+static inline ssize_t connSyncReadLine(connection *conn, char *ptr, ssize_t size, long long timeout) {
+    return conn->type->sync_readline(conn, ptr, size, timeout);
+}
+
 connection *connCreateSocket();
 connection *connCreateAcceptedSocket(int fd);
 
@@ -179,10 +205,5 @@ int connWrite(connection *conn, const void *data, size_t data_len);
 int connRead(connection *conn, void *buf, size_t buf_len);
 int connGetSocketError(connection *conn);
 void connSetPrivData(connection *conn, void *privdata);
-
-/* syncio stuff */
-ssize_t connSyncWrite(connection *conn, char *ptr, ssize_t size, long long timeout);
-ssize_t connSyncRead(connection *conn, char *ptr, ssize_t size, long long timeout);
-ssize_t connSyncReadLine(connection *conn, char *ptr, ssize_t size, long long timeout);
 
 #endif  /* __REDIS_CONNECTION_H */

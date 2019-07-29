@@ -135,31 +135,6 @@ int connSocketConnect(connection *conn, const char *addr, int port, const char *
     return C_OK;
 }
 
-/* Blocking connect.
- *
- * NOTE: This is implemented in order to simplify the transition to the abstract
- * connections, but should probably be refactored out of cluster.c and replication.c,
- * in favor of a pure async implementation.
- */
-
-int connBlockingConnect(connection *conn, const char *addr, int port, long long timeout) {
-    int fd = anetTcpNonBlockConnect(NULL,addr,port);
-    if (fd == -1) {
-        conn->state = CONN_STATE_ERROR;
-        conn->last_errno = errno;
-        return C_ERR;
-    }
-
-    if ((aeWait(fd, AE_WRITABLE, timeout) & AE_WRITABLE) == 0) {
-        conn->state = CONN_STATE_ERROR;
-        conn->last_errno = ETIMEDOUT;
-    }
-
-    conn->fd = fd;
-    conn->state = CONN_STATE_CONNECTED;
-    return C_OK;
-}
-
 /* Returns true if a write handler is registered */
 int connHasWriteHandler(connection *conn) {
     return conn->write_handler != NULL;
@@ -168,22 +143,6 @@ int connHasWriteHandler(connection *conn) {
 /* Returns true if a read handler is registered */
 int connHasReadHandler(connection *conn) {
     return conn->read_handler != NULL;
-}
-
-/* Connection-based versions of syncio.c functions.
- * NOTE: This should ideally be refactored out in favor of pure async work.
- */
-
-ssize_t connSyncWrite(connection *conn, char *ptr, ssize_t size, long long timeout) {
-    return syncWrite(conn->fd, ptr, size, timeout);
-}
-
-ssize_t connSyncRead(connection *conn, char *ptr, ssize_t size, long long timeout) {
-    return syncRead(conn->fd, ptr, size, timeout);
-}
-
-ssize_t connSyncReadLine(connection *conn, char *ptr, ssize_t size, long long timeout) {
-    return syncReadLine(conn->fd, ptr, size, timeout);
 }
 
 /* Returns the last error the connection experienced.
@@ -323,6 +282,41 @@ static void connSocketEventHandler(struct aeEventLoop *el, int fd, void *clientD
     }
 }
 
+static int connSocketBlockingConnect(connection *conn, const char *addr, int port, long long timeout) {
+    int fd = anetTcpNonBlockConnect(NULL,addr,port);
+    if (fd == -1) {
+        conn->state = CONN_STATE_ERROR;
+        conn->last_errno = errno;
+        return C_ERR;
+    }
+
+    if ((aeWait(fd, AE_WRITABLE, timeout) & AE_WRITABLE) == 0) {
+        conn->state = CONN_STATE_ERROR;
+        conn->last_errno = ETIMEDOUT;
+    }
+
+    conn->fd = fd;
+    conn->state = CONN_STATE_CONNECTED;
+    return C_OK;
+}
+
+/* Connection-based versions of syncio.c functions.
+ * NOTE: This should ideally be refactored out in favor of pure async work.
+ */
+
+static ssize_t connSocketSyncWrite(connection *conn, char *ptr, ssize_t size, long long timeout) {
+    return syncWrite(conn->fd, ptr, size, timeout);
+}
+
+static ssize_t connSocketSyncRead(connection *conn, char *ptr, ssize_t size, long long timeout) {
+    return syncRead(conn->fd, ptr, size, timeout);
+}
+
+static ssize_t connSocketSyncReadLine(connection *conn, char *ptr, ssize_t size, long long timeout) {
+    return syncReadLine(conn->fd, ptr, size, timeout);
+}
+
+
 ConnectionType CT_Socket = {
     .ae_handler = connSocketEventHandler,
     .close = connSocketClose,
@@ -333,7 +327,11 @@ ConnectionType CT_Socket = {
     .connect = connSocketConnect,
     .set_write_handler = connSocketSetWriteHandler,
     .set_read_handler = connSocketSetReadHandler,
-    .get_last_error = connSocketGetLastError
+    .get_last_error = connSocketGetLastError,
+    .blocking_connect = connSocketBlockingConnect,
+    .sync_write = connSocketSyncWrite,
+    .sync_read = connSocketSyncRead,
+    .sync_readline = connSocketSyncReadLine
 };
 
 
