@@ -145,7 +145,6 @@ ifeq ($(MALLOC),jemalloc)
 	FINAL_LIBS := ../deps/jemalloc/lib/libjemalloc.a $(FINAL_LIBS)
 endif
 
-BUILD_TLS=yes
 ifeq ($(BUILD_TLS),yes)
     FINAL_CFLAGS += -DUSE_OPENSSL
     FINAL_LIBS += -lssl -lcrypto
