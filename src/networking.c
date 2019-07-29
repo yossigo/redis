@@ -831,9 +831,8 @@ void clientAcceptHandler(connection *conn) {
 
 
 #define MAX_ACCEPTS_PER_CALL 1000
-static void acceptCommonHandler(int fd, int flags, char *ip) {
+static void acceptCommonHandler(connection *conn, int flags, char *ip) {
     client *c;
-    connection *conn;
     UNUSED(ip);
 
     /* Admission control will happen before a client is created and connAccept()
@@ -849,16 +848,15 @@ static void acceptCommonHandler(int fd, int flags, char *ip) {
          */
 
         /* That's a best effort error message, don't check write errors */
-        if (write(fd,err,strlen(err)) == -1) {
+        if (connWrite(conn,err,strlen(err)) == -1) {
             /* Nothing to do, Just to avoid the warning... */
         }
         server.stat_rejected_conn++;
-        close(fd);
+        connClose(conn);
         return;
     }
 
     /* Create connection and client */
-    conn = connCreateAcceptedSocket(fd);
     if ((c = createClient(conn)) == NULL) {
         char conninfo[100];
         serverLog(LL_WARNING,
@@ -881,9 +879,10 @@ static void acceptCommonHandler(int fd, int flags, char *ip) {
      * Because of that, we must do nothing else afterwards.
      */
     if (connAccept(conn, clientAcceptHandler) == C_ERR) {
+        char conninfo[100];
         serverLog(LL_WARNING,
-                "Error accepting a client connection: %s (fd=%d)",
-                connGetLastError(conn), fd);
+                "Error accepting a client connection: %s (conn: %s)",
+                connGetLastError(conn), connGetInfo(conn, conninfo, sizeof(conninfo)));
         connClose(conn);
         return;
     }
@@ -905,7 +904,7 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         }
         serverLog(LL_VERBOSE,"Accepted %s:%d", cip, cport);
-        acceptCommonHandler(cfd,0,cip);
+        acceptCommonHandler(connCreateAcceptedSocket(cfd),0,cip);
     }
 }
 
@@ -924,7 +923,7 @@ void acceptUnixHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         }
         serverLog(LL_VERBOSE,"Accepted connection to %s", server.unixsocket);
-        acceptCommonHandler(cfd,CLIENT_UNIX_SOCKET,NULL);
+        acceptCommonHandler(connCreateAcceptedSocket(cfd),CLIENT_UNIX_SOCKET,NULL);
     }
 }
 
