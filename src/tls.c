@@ -186,6 +186,7 @@ typedef enum {
 
 #define TLS_CONN_FLAG_READ_WANT_WRITE   (1<<0)
 #define TLS_CONN_FLAG_WRITE_WANT_READ   (1<<1)
+#define TLS_CONN_FLAG_FD_SET            (1<<2)
 
 typedef struct tls_connection {
     connection c;
@@ -285,8 +286,8 @@ static void tlsEventHandler(struct aeEventLoop *el, int fd, void *clientData, in
     tls_connection *conn = clientData;
     int ret;
 
-    TLSCONN_DEBUG("tlsEventHandler(): fd=%d, mask=%d, r=%d, w=%d, flags=%d",
-            fd, mask, conn->c.read_handler != NULL, conn->c.write_handler != NULL,
+    TLSCONN_DEBUG("tlsEventHandler(): fd=%d, state=%d, mask=%d, r=%d, w=%d, flags=%d",
+            fd, conn->c.state, mask, conn->c.read_handler != NULL, conn->c.write_handler != NULL,
             conn->flags);
 
     switch (conn->c.state) {
@@ -295,13 +296,21 @@ static void tlsEventHandler(struct aeEventLoop *el, int fd, void *clientData, in
                 conn->c.last_errno = errno;
                 conn->c.state = CONN_STATE_ERROR;
             } else {
-                SSL_set_fd(conn->ssl, conn->c.fd);
+                if (!(conn->flags & TLS_CONN_FLAG_FD_SET)) {
+                    SSL_set_fd(conn->ssl, conn->c.fd);
+                    conn->flags |= TLS_CONN_FLAG_FD_SET;
+                }
                 ret = SSL_connect(conn->ssl);
                 if (ret <= 0) {
                     WantIOType want = 0;
                     if (handleSSLReturnCode(conn, ret, &want) == C_OK) {
                         registerSSLEvent(conn, want);
-                        break;
+
+                        /* Avoid hitting UpdateSSLEvent, which knows nothing
+                         * of what SSL_connect() wants and instead looks at our
+                         * R/W handlers.
+                         */
+                        return;
                     }
 
                     /* If not handled, it's an error */
