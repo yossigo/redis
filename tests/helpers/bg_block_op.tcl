@@ -8,8 +8,8 @@ source tests/support/util.tcl
 # space to just a few elements, and balance the operations so that it is
 # unlikely that lists and zsets just get more data without ever causing
 # blocking.
-proc bg_block_op {host port db ops} {
-    set r [redis $host $port]
+proc bg_block_op {host port db ops tls} {
+    set r [redis $host $port 0 $tls]
     $r select $db
 
     for {set j 0} {$j < $ops} {incr j} {
@@ -49,4 +49,4 @@ proc bg_block_op {host port db ops} {
     }
 }
 
-bg_block_op [lindex $argv 0] [lindex $argv 1] [lindex $argv 2] [lindex $argv 3]
+bg_block_op [lindex $argv 0] [lindex $argv 1] [lindex $argv 2] [lindex $argv 3] [lindex $argv 4]
