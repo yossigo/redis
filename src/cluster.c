@@ -476,7 +476,8 @@ void clusterInit(void) {
     /* Port sanity check II
      * The other handshake port check is triggered too late to stop
      * us from trying to use a too-high cluster port number. */
-    if (server.port > (65535-CLUSTER_PORT_INCR)) {
+    int port = server.tls_cluster ? server.tls_port : server.port;
+    if (port > (65535-CLUSTER_PORT_INCR)) {
         serverLog(LL_WARNING, "Redis port number too high. "
                    "Cluster communication port is 10,000 port "
                    "numbers higher than your Redis port. "
@@ -484,8 +485,7 @@ void clusterInit(void) {
                    "lower than 55535.");
         exit(1);
     }
-
-    if (listenToPort(server.port+CLUSTER_PORT_INCR,
+    if (listenToPort(port+CLUSTER_PORT_INCR,
         server.cfd,&server.cfd_count) == C_ERR)
     {
         exit(1);
@@ -507,8 +507,8 @@ void clusterInit(void) {
 
     /* Set myself->port / cport to my listening ports, we'll just need to
      * discover the IP address via MEET messages. */
-    myself->port = server.port;
-    myself->cport = server.port+CLUSTER_PORT_INCR;
+    myself->port = port;
+    myself->cport = port+CLUSTER_PORT_INCR;
     if (server.cluster_announce_port)
         myself->port = server.cluster_announce_port;
     if (server.cluster_announce_bus_port)
@@ -618,9 +618,6 @@ static void clusterConnAcceptHandler(connection *conn) {
         serverLog(LL_VERBOSE,
                 "Error accepting cluster node connection: %s", connGetLastError(conn));
         connClose(conn);
-        /* TODO: The above is broken, handler callback should have a way to
-         * signal that connection is to be closed and freed.
-         */
         return;
     }
 
@@ -2345,11 +2342,12 @@ void clusterBuildMessageHdr(clusterMsg *hdr, int type) {
     }
 
     /* Handle cluster-announce-port as well. */
+    int port = server.tls_cluster ? server.tls_port : server.port;
     int announced_port = server.cluster_announce_port ?
-                         server.cluster_announce_port : server.port;
+                         server.cluster_announce_port : port;
     int announced_cport = server.cluster_announce_bus_port ?
                           server.cluster_announce_bus_port :
-                          (server.port + CLUSTER_PORT_INCR);
+                          (port + CLUSTER_PORT_INCR);
 
     memcpy(hdr->myslots,master->slots,sizeof(hdr->myslots));
     memset(hdr->slaveof,0,CLUSTER_NAMELEN);
