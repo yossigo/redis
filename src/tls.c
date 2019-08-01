@@ -328,8 +328,12 @@ static void tlsEventHandler(struct aeEventLoop *el, int fd, void *clientData, in
             if (ret <= 0) {
                 WantIOType want = 0;
                 if (handleSSLReturnCode(conn, ret, &want) == C_OK) {
+                    /* Avoid hitting UpdateSSLEvent, which knows nothing
+                     * of what SSL_connect() wants and instead looks at our
+                     * R/W handlers.
+                     */
                     registerSSLEvent(conn, want);
-                    break;
+                    return;
                 }
 
                 /* If not handled, it's an error */
