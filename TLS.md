@@ -22,6 +22,8 @@ implementation details between TLS and TCP.
 3. Finish cleaning up the implementation.  Make sure all error cases are handled
    and reflected into connection state, connection state validated before
    certain operations, etc.
+    - Clean (non-errno) interface to report would-block.
+    - Consistent error reporting.
 
 4. Sync IO for TLS is currently implemented in a hackish way, i.e. making the
    socket blocking and configuring socket-level timeout.  This means the timeout
