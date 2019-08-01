@@ -72,6 +72,8 @@ proc spawn_instance {type base_port count {conf {}}} {
         set cfg [open $cfgfile w]
         if {$::tls} {
             puts $cfg "tls-port $port"
+            puts $cfg "tls-replication yes"
+            puts $cfg "tls-cluster yes"
             puts $cfg "port 0"
             puts $cfg [format "tls-cert-file %s/../../tls/redis.crt" [pwd]]
             puts $cfg [format "tls-key-file %s/../../tls/redis.key" [pwd]]
@@ -79,7 +81,7 @@ proc spawn_instance {type base_port count {conf {}}} {
             puts $cfg [format "tls-ca-cert-file %s/../../tls/ca-bundle.crt" [pwd]]
             puts $cfg "loglevel debug"
         } else {
-            puts cfg "port $port"
+            puts $cfg "port $port"
         }
         puts $cfg "dir ./$dirname"
         puts $cfg "logfile log.txt"
