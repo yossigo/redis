@@ -57,8 +57,8 @@ start_server {tags {"cli"}} {
     }
 
     proc _run_cli {opts args} {
-        set cmd [rediscli [srv port] [linsert args 0 "-n 9"]]
-        foreach {key value} $opts {
+        set cmd [rediscli [srv port] [list -n 9 {*}$args]]
+        foreach {key value} $args {
             if {$key eq "pipe"} {
                 set cmd "sh -c \"$value | $cmd\""
             }

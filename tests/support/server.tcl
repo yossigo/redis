@@ -185,7 +185,7 @@ proc start_server {options {code undefined}} {
         dict set config "tls-cert-file" [format "%s/tests/tls/redis.crt" [pwd]]
         dict set config "tls-key-file" [format "%s/tests/tls/redis.key" [pwd]]
         dict set config "tls-dh-params-file" [format "%s/tests/tls/redis.dh" [pwd]]
-        dict set config "tls-ca-cert-file" [format "%s/tests/tls/ca-bundle.crt" [pwd]]
+        dict set config "tls-ca-cert-file" [format "%s/tests/tls/ca.crt" [pwd]]
         dict set config "loglevel" "debug"
     }
     foreach line $data {
