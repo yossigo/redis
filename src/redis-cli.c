@@ -775,7 +775,8 @@ static int cliConnect(int flags) {
         if (!context->err && config.tls) {
             if (redisSecureConnection(context, config.cacert, config.cert, config.key, config.sni) == REDIS_ERR &&
                     !context->err) {
-                fprintf(stderr, "failed.\n");
+                /* TODO: this check should be redundant, redis-cli should set err=1 */
+                fprintf(stderr, "Could not negotiate a TLS connection.\n");
                 context = NULL;
                 redisFree(context);
                 return REDIS_ERR;
@@ -1261,6 +1262,9 @@ static redisReply *reconnectingRedisCommand(redisContext *c, const char *fmt, ..
 
             redisFree(c);
             c = redisConnect(config.hostip,config.hostport);
+            if (!c->err && config.tls) {
+                redisSecureConnection(c, config.cacert, config.cert, config.key, config.sni);
+            }
             usleep(1000000);
         }
 
@@ -2371,6 +2375,9 @@ cleanup:
 static int clusterManagerNodeConnect(clusterManagerNode *node) {
     if (node->context) redisFree(node->context);
     node->context = redisConnect(node->ip, node->port);
+    if (!node->context->err && config.tls) {
+        redisSecureConnection(node->context, config.cacert, config.cert, config.key, config.sni);
+    }
     if (node->context->err) {
         fprintf(stderr,"Could not connect to Redis at ");
         fprintf(stderr,"%s:%d: %s\n", node->ip, node->port,
