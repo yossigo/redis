@@ -580,6 +580,16 @@ exit:
     return nread;
 }
 
+/* TODO: This is probably not the right thing to do, but as we handle proxying from child
+ * processes we'll probably not need any shutdown mechanism anyway so this is just a
+ * place holder for now.
+ */
+static int connTLSShutdown(connection *conn_, int how) {
+    UNUSED(how);
+    tls_connection *conn = (tls_connection *) conn_;
+
+    return SSL_shutdown(conn->ssl);
+}
 
 ConnectionType CT_TLS = {
     .ae_handler = tlsEventHandler,
@@ -595,6 +605,7 @@ ConnectionType CT_TLS = {
     .sync_write = connTLSSyncWrite,
     .sync_read = connTLSSyncRead,
     .sync_readline = connTLSSyncReadLine,
+    .shutdown = connTLSShutdown
 };
 
 #else   /* USE_OPENSSL */
