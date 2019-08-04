@@ -188,6 +188,11 @@ static struct config {
     char *hostip;
     int hostport;
     char *hostsocket;
+    int tls;
+    char *sni;
+    char *cacert;
+    char *cert;
+    char *key;
     long repeat;
     long interval;
     int dbnum;
@@ -767,6 +772,16 @@ static int cliConnect(int flags) {
             context = redisConnectUnix(config.hostsocket);
         }
 
+        if (!context->err && config.tls) {
+            if (redisSecureConnection(context, config.cacert, config.cert, config.key, config.sni) == REDIS_ERR &&
+                    !context->err) {
+                fprintf(stderr, "failed.\n");
+                context = NULL;
+                redisFree(context);
+                return REDIS_ERR;
+            }
+        }
+
         if (context->err) {
             if (!(flags & CC_QUIET)) {
                 fprintf(stderr,"Could not connect to Redis at ");
@@ -781,6 +796,7 @@ static int cliConnect(int flags) {
             context = NULL;
             return REDIS_ERR;
         }
+
 
         /* Set aggressive KEEP_ALIVE socket option in the Redis context socket
          * in order to prevent timeouts caused by the execution of long
@@ -1434,6 +1450,18 @@ static int parseOptions(int argc, char **argv) {
         } else if (!strcmp(argv[i],"--cluster-search-multiple-owners")) {
             config.cluster_manager_command.flags |=
                 CLUSTER_MANAGER_CMD_FLAG_CHECK_OWNERS;
+#ifdef USE_OPENSSL
+        } else if (!strcmp(argv[i],"--tls")) {
+            config.tls = 1;
+        } else if (!strcmp(argv[i],"--sni")) {
+            config.sni = argv[++i];
+        } else if (!strcmp(argv[i],"--cacert")) {
+            config.cacert = argv[++i];
+        } else if (!strcmp(argv[i],"--cert")) {
+            config.cert = argv[++i];
+        } else if (!strcmp(argv[i],"--key")) {
+            config.key = argv[++i];
+#endif
         } else if (!strcmp(argv[i],"-v") || !strcmp(argv[i], "--version")) {
             sds version = cliVersion();
             printf("redis-cli %s\n", version);
@@ -1522,6 +1550,12 @@ static void usage(void) {
 "  -x                 Read last argument from STDIN.\n"
 "  -d <delimiter>     Multi-bulk delimiter in for raw formatting (default: \\n).\n"
 "  -c                 Enable cluster mode (follow -ASK and -MOVED redirections).\n"
+#ifdef USE_OPENSSL
+"  --tls              Establish a secure TLS connection.\n"
+"  --cacert           CA Certificate file to verify with.\n"
+"  --cert             Client certificate to authenticate with.\n"
+"  --key              Private key file to authenticate with.\n"
+#endif
 "  --raw              Use raw formatting for replies (default when STDOUT is\n"
 "                     not a tty).\n"
 "  --no-raw           Force formatted output even when STDOUT is not a tty.\n"
@@ -1544,7 +1578,9 @@ static void usage(void) {
 "  --pipe             Transfer raw Redis protocol from stdin to server.\n"
 "  --pipe-timeout <n> In --pipe mode, abort with error if after sending all data.\n"
 "                     no reply is received within <n> seconds.\n"
-"                     Default timeout: %d. Use 0 to wait forever.\n"
+"                     Default timeout: %d. Use 0 to wait forever.\n",
+    version, REDIS_CLI_DEFAULT_PIPE_TIMEOUT);
+    fprintf(stderr,
 "  --bigkeys          Sample Redis keys looking for keys with many elements (complexity).\n"
 "  --memkeys          Sample Redis keys looking for keys consuming a lot of memory.\n"
 "  --memkeys-samples <n> Sample Redis keys looking for keys consuming a lot of memory.\n"
@@ -1567,8 +1603,7 @@ static void usage(void) {
 "                     line interface.\n"
 "  --help             Output this help and exit.\n"
 "  --version          Output version and exit.\n"
-"\n",
-    version, REDIS_CLI_DEFAULT_PIPE_TIMEOUT);
+"\n");
     /* Using another fprintf call to avoid -Woverlength-strings compile warning */
     fprintf(stderr,
 "Cluster Manager Commands:\n"
