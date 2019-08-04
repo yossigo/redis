@@ -1,11 +1,10 @@
+source tests/support/cli.tcl
+
 start_server {tags {"cli"}} {
     proc open_cli {} {
         set ::env(TERM) dumb
-        if {$::tls} {
-            fail "TLS not supported"
-        } else {
-            set fd [open [format "|src/redis-cli -p %d -n 9" [srv port]] "r+"]
-        }
+        set cmdline [rediscli [srv port] "-n 9"]
+        set fd [open "|$cmdline" "r+"]
         fconfigure $fd -buffering none
         fconfigure $fd -blocking false
         fconfigure $fd -translation binary
@@ -58,11 +57,7 @@ start_server {tags {"cli"}} {
     }
 
     proc _run_cli {opts args} {
-        if {$::tls} {
-            fail "TLS not supported"
-        } else {
-            set cmd [format "src/redis-cli -p %d -n 9 $args" [srv port]]
-        }
+        set cmd [rediscli [srv port] [linsert args 0 "-n 9"]]
         foreach {key value} $opts {
             if {$key eq "pipe"} {
                 set cmd "sh -c \"$value | $cmd\""
