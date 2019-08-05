@@ -34,6 +34,16 @@ implementation details between TLS and TCP.
    difficult, but there are probably other good reasons to improve that part
    anyway.
 
+5. A mechanism to re-trigger read callbacks for connections with unread buffers
+   (the case of reading partial TLS frames):
+
+    a) Before sleep should iterate connections looking for those with a read handler,
+       SSL_pending() != 0 and no read event.
+    b) If found, trigger read handler for these conns.
+    c) After iteration if this state persists, epoll should be called in a way
+       that won't block so the process continues and this behave the same as a
+       level trigerred epoll.
+
 Replication
 -----------
 
