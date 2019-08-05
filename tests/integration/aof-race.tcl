@@ -14,11 +14,7 @@ tags {"aof"} {
     # was subsequently appended to the new AOF, resulting in duplicate commands.
     start_server_aof [list dir $server_path] {
         set client [redis [srv host] [srv port] 0 $::tls]
-        if {$::tls}{
-            fail "TLS not supported"
-        } else {
-            set bench [open "|src/redis-benchmark -q -p [srv port] -c 20 -n 20000 incr foo" "r+"]
-        }
+        set bench [open "|src/redis-benchmark -q -s [srv unixsocket] -c 20 -n 20000 incr foo" "r+"]
 
         after 100
 

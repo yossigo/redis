@@ -18,6 +18,7 @@ start_server {} {
         set R($j) [srv [expr 0-$j] client]
         set R_host($j) [srv [expr 0-$j] host]
         set R_port($j) [srv [expr 0-$j] port]
+        set R_unixsocket($j) [srv [expr 0-$j] unixsocket]
         if {$debug_msg} {puts "Log file: [srv [expr 0-$j] stdout]"}
     }
 
@@ -36,25 +37,23 @@ start_server {} {
     }
 
     set cycle_start_time [clock milliseconds]
-    if {!$::tls} {
-        set bench_pid [exec src/redis-benchmark -p $R_port(0) -n 10000000 -r 1000 incr __rand_int__ > /dev/null &]
-        while 1 {
-            set elapsed [expr {[clock milliseconds]-$cycle_start_time}]
-            if {$elapsed > $duration*1000} break
-            if {rand() < .05} {
-                test "PSYNC2 #3899 regression: kill first replica" {
-                    $R(1) client kill type master
-                }
+    set bench_pid [exec src/redis-benchmark -s $R_unixsocket(0) -n 10000000 -r 1000 incr __rand_int__ > /dev/null &]
+    while 1 {
+        set elapsed [expr {[clock milliseconds]-$cycle_start_time}]
+        if {$elapsed > $duration*1000} break
+        if {rand() < .05} {
+            test "PSYNC2 #3899 regression: kill first replica" {
+                $R(1) client kill type master
             }
-            if {rand() < .05} {
-                test "PSYNC2 #3899 regression: kill chained replica" {
-                    $R(2) client kill type master
-                }
-            }
-            after 100
         }
-        exec kill -9 $bench_pid
+        if {rand() < .05} {
+            test "PSYNC2 #3899 regression: kill chained replica" {
+                $R(2) client kill type master
+            }
+        }
+        after 100
     }
+    exec kill -9 $bench_pid
 
     if {$debug_msg} {
         for {set j 0} {$j < 100} {incr j} {

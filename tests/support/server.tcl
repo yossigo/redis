@@ -211,6 +211,9 @@ proc start_server {options {code undefined}} {
         dict set config port $::port
     }
 
+    set unixsocket [file normalize [format "%s/%s" [dict get $config "dir"] "socket"]]
+    dict set config "unixsocket" $unixsocket
+
     # apply overrides from global space and arguments
     foreach {directive arguments} [concat $::global_overrides $overrides] {
         dict set config $directive $arguments
@@ -285,6 +288,7 @@ proc start_server {options {code undefined}} {
     dict set srv "port" $port
     dict set srv "stdout" $stdout
     dict set srv "stderr" $stderr
+    dict set srv "unixsocket" $unixsocket
 
     # if a block of code is supplied, we wait for the server to become
     # available, create a client object and kill the server afterwards

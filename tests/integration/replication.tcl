@@ -30,7 +30,7 @@ start_server {tags {"repl"}} {
 
         test {Slave enters handshake} {
             if {$::tls} {
-                fail "TLS not YET supported"
+                fail "TLS with repl-diskless-sync not supported yet."
             }
             wait_for_condition 50 1000 {
                 [string match *handshake* [$slave role]]
@@ -188,6 +188,7 @@ start_server {tags {"repl"}} {
 
 foreach mdl {no yes} {
     if {$::tls && $mdl eq "yes"} {
+        puts "** Skipping test: TLS with repl-diskless-sync not supported yet."
         continue
     }
     foreach sdl {disabled swapdb} {
@@ -327,7 +328,7 @@ start_server {tags {"repl"}} {
 
 test {slave fails full sync and diskless load swapdb recoveres it} {
     if {$::tls} {
-        fail "TLS not YET supported"
+        fail ""
     }
     start_server {tags {"repl"}} {
         set slave [srv 0 client]
@@ -397,7 +398,7 @@ test {slave fails full sync and diskless load swapdb recoveres it} {
 
 test {diskless loading short read} {
     if {$::tls} {
-        fail "TLS not YET supported"
+        fail "TLS with repl-diskless-sync not supported yet."
     }
 
     start_server {tags {"repl"}} {
