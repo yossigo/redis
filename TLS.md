@@ -4,6 +4,52 @@ TLS Support -- Work In Progress
 This is a brief note to capture current thoughts/ideas and track pending action
 items.
 
+Getting Started
+---------------
+
+### Building
+
+To build with TLS support you'll need OpenSSL development libraries (e.g.
+libssl-dev on Debian/Ubuntu).
+
+Run `make BUILD_TLS=yes`.
+
+### Tests
+
+To run Redis test suite with TLS:
+
+1. Run `./utils/gen-test-certs.sh` to generate a root CA and a server
+   certificate.
+
+2. Run `./runtest --tls` or `./runtest-cluster --tls` to run Redis and Redis
+   Cluster tests in TLS mode.
+
+### Running manually
+
+To manually run a Redis server with TLS mode (assuming `gen-test-certs.sh` was
+invoked so sample certificates/keys are available):
+
+    ./src/redis-server --tls-port 6379 --port 0 \
+        --tls-cert-file ./tests/tls/redis.crt \
+        --tls-key-file ./tests/tls/redis.key \
+        --tls-ca-cert-file ./tests/tls/ca.crt
+
+To connect to this Redis server with `redis-cli`:
+
+    ./src/redis-cli --tls \
+        --cert ./tests/tls/redis.crt \
+        --key ./tests/tls/redis.key \
+        --cacert ./tests/tls/ca.crt
+
+This will disable TCP and enable TLS on port 6379. It's also possible to have
+both TCP and TLS available, but you'll need to assign different ports.
+
+To make a Replica connect to the master using TLS, use `--tls-replication yes`,
+and to make Redis Cluster use TLS across nodes use `--tls-cluster yes`.
+
+**NOTE: This is still very much work in progress and some configuration is still
+missing or may change.**
+
 Connections
 -----------
 
