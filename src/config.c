@@ -816,6 +816,8 @@ void loadServerConfigFromString(char *config) {
             server.tls_cluster = yesnotoi(argv[1]);
         } else if (!strcasecmp(argv[0],"tls-replication") && argc == 2) {
             server.tls_replication = yesnotoi(argv[1]);
+        } else if (!strcasecmp(argv[0],"tls-auth-clients") && argc == 2) {
+            server.tls_auth_clients = yesnotoi(argv[1]);
         } else {
             err = "Bad directive or wrong number of arguments"; goto loaderr;
         }
@@ -1296,6 +1298,7 @@ void configSetCommand(client *c) {
         }
         zfree(server.tls_ca_cert_file);
         server.tls_ca_cert_file = zstrdup(o->ptr);
+    } config_set_bool_field("tls-auth-clients", server.tls_auth_clients) {
     
     /* Everyhing else is an error... */
     } config_set_else {
@@ -1374,8 +1377,6 @@ void configGetCommand(client *c) {
     config_get_string_field("tls-key-file",server.tls_key_file);
     config_get_string_field("tls-dh-params-file",server.tls_dh_params_file);
     config_get_string_field("tls-ca-cert-file",server.tls_ca_cert_file);
-    config_get_bool_field("tls-cluster",server.tls_cluster);
-    config_get_bool_field("tls-replication",server.tls_replication);
 
     /* Numerical values */
     config_get_numerical_field("maxmemory",server.maxmemory);
@@ -1463,6 +1464,9 @@ void configGetCommand(client *c) {
     }
 
     config_get_bool_field("activedefrag", server.active_defrag_enabled);
+    config_get_bool_field("tls-cluster",server.tls_cluster);
+    config_get_bool_field("tls-replication",server.tls_replication);
+    config_get_bool_field("tls-auth-clients",server.tls_auth_clients);
 
     /* Enum values */
     config_get_enum_field("maxmemory-policy",
@@ -2189,6 +2193,7 @@ int rewriteConfig(char *path) {
     rewriteConfigNumericalOption(state,"tcp-backlog",server.tcp_backlog,CONFIG_DEFAULT_TCP_BACKLOG);
     rewriteConfigYesNoOption(state,"tls-cluster",server.tls_cluster,0);
     rewriteConfigYesNoOption(state,"tls-replication",server.tls_replication,0);
+    rewriteConfigYesNoOption(state,"tls-auth-clients",server.tls_auth_clients,1);
     rewriteConfigBindOption(state);
     rewriteConfigStringOption(state,"unixsocket",server.unixsocket,NULL);
     rewriteConfigOctalOption(state,"unixsocketperm",server.unixsocketperm,CONFIG_DEFAULT_UNIX_SOCKET_PERM);

@@ -163,6 +163,10 @@ proc parse_options {} {
             set ::valgrind 1
         } elseif {$opt eq {--tls}} {
             package require tls 1.6
+            ::tls::init \
+                -cafile "$::tlsdir/ca.crt" \
+                -certfile "$::tlsdir/redis.crt" \
+                -keyfile "$::tlsdir/redis.key"
             set ::tls 1
         } elseif {$opt eq "--help"} {
             puts "Hello, I'm sentinel.tcl and I run Sentinel unit tests."

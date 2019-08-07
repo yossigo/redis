@@ -656,7 +656,7 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         }
 
-        connection *conn = server.tls_cluster ? connCreateAcceptedTLS(cfd) : connCreateAcceptedSocket(cfd);
+        connection *conn = server.tls_cluster ? connCreateAcceptedTLS(cfd,1) : connCreateAcceptedSocket(cfd);
         connNonBlock(conn);
         connEnableTcpNoDelay(conn);
 

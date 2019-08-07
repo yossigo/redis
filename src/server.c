@@ -2420,6 +2420,9 @@ void initServerConfig(void) {
      * script to the slave / AOF. This is the new way starting from
      * Redis 5. However it is possible to revert it via redis.conf. */
     server.lua_always_replicate_commands = 1;
+
+    /* TLS */
+    server.tls_auth_clients = 1;
 }
 
 extern char **environ;

@@ -171,7 +171,7 @@ connection *connCreateSocket();
 connection *connCreateAcceptedSocket(int fd);
 
 connection *connCreateTLS();
-connection *connCreateAcceptedTLS(int fd);
+connection *connCreateAcceptedTLS(int fd, int require_auth);
 
 void connSetPrivateData(connection *conn, void *data);
 void *connGetPrivateData(connection *conn);

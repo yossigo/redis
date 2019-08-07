@@ -1412,6 +1412,7 @@ struct redisServer {
     char *tls_key_file;
     char *tls_dh_params_file;
     char *tls_ca_cert_file;
+    int tls_auth_clients;
 };
 
 typedef struct pubsubPattern {

@@ -42,6 +42,10 @@ array set ::redis::statestack {} ;# Stack of states, for nested mbulks
 proc redis {{server 127.0.0.1} {port 6379} {defer 0} {tls 0}} {
     if {$tls} {
         package require tls
+        ::tls::init \
+            -cafile "$::tlsdir/ca.crt" \
+            -certfile "$::tlsdir/redis.crt" \
+            -keyfile "$::tlsdir/redis.key"
         set fd [::tls::socket $server $port]
     } else {
         set fd [socket $server $port]

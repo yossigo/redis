@@ -56,6 +56,9 @@ int tlsConfigureServer(void) {
             server.tls_dh_params_file, server.tls_ca_cert_file);
 }
 
+/* Attempt to configure/reconfigure TLS. This operation is atomic and will
+ * leave the SSL_CTX unchanged if fails.
+ */
 int tlsConfigure(const char *cert_file, const char *key_file,
         const char *dh_params_file, const char *ca_cert_file) {
 
@@ -78,7 +81,7 @@ int tlsConfigure(const char *cert_file, const char *key_file,
     }
 
     ctx = SSL_CTX_new(TLS_method());
-    SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL);
+    SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER|SSL_VERIFY_FAIL_IF_NO_PEER_CERT, NULL);
     SSL_CTX_set_ecdh_auto(ctx, 1);
 
     if (SSL_CTX_use_certificate_file(ctx, cert_file, SSL_FILETYPE_PEM) <= 0) {
@@ -178,10 +181,16 @@ connection *connCreateTLS(void) {
     return (connection *) conn;
 }
 
-connection *connCreateAcceptedTLS(int fd) {
+connection *connCreateAcceptedTLS(int fd, int require_auth) {
     tls_connection *conn = (tls_connection *) connCreateTLS();
     conn->c.fd = fd;
     conn->c.state = CONN_STATE_ACCEPTING;
+
+    if (!require_auth) {
+        /* We still verify certificates if provided, but don't require them.
+         */
+        SSL_set_verify(conn->ssl, SSL_VERIFY_PEER, NULL);
+    }
 
     SSL_set_fd(conn->ssl, conn->c.fd);
     SSL_set_accept_state(conn->ssl);
@@ -605,7 +614,7 @@ connection *connCreateTLS(void) {
     return NULL;
 }
 
-connection *connCreateAcceptedTLS(int fd) {
+connection *connCreateAcceptedTLS(int fd, int require_auth) {
     UNUSED(fd);
 
     return NULL;

@@ -63,6 +63,7 @@ set ::all_tests {
     unit/lazyfree
     unit/wait
     unit/pendingquerybuf
+    unit/tls
 }
 # Index to the next test to run in the ::all_tests list.
 set ::next_test 0
@@ -93,6 +94,7 @@ set ::dont_clean 0
 set ::wait_server 0
 set ::stop_on_failure 0
 set ::loop 0
+set ::tlsdir "tests/tls"
 
 # Set to 1 when we are running in client mode. The Redis test uses a
 # server-client model to run tests simultaneously. The server instance
@@ -491,6 +493,10 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
     } elseif {$opt eq {--tls}} {
         package require tls 1.6
         set ::tls 1
+        ::tls::init \
+            -cafile "tests/tls/ca.crt" \
+            -certfile "tests/tls/redis.crt" \
+            -keyfile "tests/tls/redis.key"
     } elseif {$opt eq {--host}} {
         set ::external 1
         set ::host $arg
