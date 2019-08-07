@@ -1,4 +1,5 @@
 #!/bin/bash
+mkdir -p tests/tls
 openssl genrsa -out tests/tls/ca.key 4096
 openssl req \
     -x509 -new -nodes -sha256 \

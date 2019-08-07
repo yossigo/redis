@@ -16,7 +16,8 @@ Run `make BUILD_TLS=yes`.
 
 ### Tests
 
-To run Redis test suite with TLS:
+To run Redis test suite with TLS, you'll need TLS support for TCL (i.e.
+`tcl-tls` package on Debian/Ubuntu).
 
 1. Run `./utils/gen-test-certs.sh` to generate a root CA and a server
    certificate.
@@ -93,13 +94,8 @@ implementation details between TLS and TCP.
 Replication
 -----------
 
-Replication is broken until the child/parent connection sharing issue is
-handled.
-
-Apparently OpenSSL's session caching mechanism cannot be used as-is, and as we
-don't want to rely on any OpenSSL patches we may need to revert to proxying.  In
-that case, it may be possible to hide that in the connection implementation as
-well.
+Diskless master replication is broken, until child/parent connection proxying is
+implemented.
 
 
 TLS Features
@@ -113,18 +109,15 @@ auth, master auth, etc.).
    to assess how useful/important it is.
 
 
-redis-cli
----------
-
-1. Check the status of TLS support in hiredis, identify gaps.
-2. Pull in latest hiredis + TLS support and integrate with redis-cli.
-
-
 redis-benchmark
 ---------------
 
-Does it use hiredis?
-Anyway TLS support will be required there for completeness.
+The current implementation is a mix of using hiredis for parsing and basic
+networking (establishing connections), but directly manipulating sockets for
+most actions.
+
+This will need to be cleaned up for proper TLS support. The best approach is
+probably to migrate to hiredis async mode.
 
 
 Others

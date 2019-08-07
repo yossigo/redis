@@ -842,12 +842,10 @@ static void acceptCommonHandler(connection *conn, int flags, char *ip) {
     if (listLength(server.clients) >= server.maxclients) {
         char *err = "-ERR max number of clients reached\r\n";
 
-        /* TODO: We'll need to differentiate TLS/Socket here and handle
-         * this specific case. We could offload this as connection abstraction
-         * as well but it's only a single, specific case!
+        /* That's a best effort error message, don't check write errors.
+         * Note that for TLS connections, no handshake was done yet so nothing is written
+         * and the connection will just drop.
          */
-
-        /* That's a best effort error message, don't check write errors */
         if (connWrite(conn,err,strlen(err)) == -1) {
             /* Nothing to do, Just to avoid the warning... */
         }

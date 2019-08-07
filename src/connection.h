@@ -66,8 +66,6 @@ typedef struct ConnectionType {
     ssize_t (*sync_readline)(struct connection *conn, char *ptr, ssize_t size, long long timeout);
 } ConnectionType;
 
-extern ConnectionType CT_Socket;
-
 struct connection {
     ConnectionType *type;
     ConnectionState state;
@@ -178,7 +176,9 @@ connection *connCreateAcceptedTLS(int fd);
 void connSetPrivateData(connection *conn, void *data);
 void *connGetPrivateData(connection *conn);
 int connGetState(connection *conn);
-int connIsCreated(connection *conn);
+int connHasWriteHandler(connection *conn);
+int connHasReadHandler(connection *conn);
+int connGetSocketError(connection *conn);
 
 /* anet-style wrappers to conns */
 int connBlock(connection *conn);
@@ -192,18 +192,5 @@ int connPeerToString(connection *conn, char *ip, size_t ip_len, int *port);
 int connFormatPeer(connection *conn, char *buf, size_t buf_len);
 int connSockName(connection *conn, char *ip, size_t ip_len, int *port);
 const char *connGetInfo(connection *conn, char *buf, size_t buf_len);
-
-/**/
-
-int connConnect(connection *conn, const char *addr, int port, const char *src_addr,
-        ConnectionCallbackFunc connect_handler);
-int connBlockingConnect(connection *conn, const char *addr, int port, long long timeout);
-
-int connHasWriteHandler(connection *conn);
-int connHasReadHandler(connection *conn);
-int connWrite(connection *conn, const void *data, size_t data_len);
-int connRead(connection *conn, void *buf, size_t buf_len);
-int connGetSocketError(connection *conn);
-void connSetPrivData(connection *conn, void *privdata);
 
 #endif  /* __REDIS_CONNECTION_H */

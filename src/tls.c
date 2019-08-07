@@ -29,6 +29,7 @@
 
 
 #include "server.h"
+#include "connhelpers.h"
 
 #ifdef USE_OPENSSL
 
@@ -36,12 +37,10 @@
 #include <openssl/err.h>
 #include <openssl/rand.h>
 
+extern ConnectionType CT_Socket;
+
 static SSL_CTX *tls_ctx;
 
-
-/* TODO: this is just hard coded POC stuff, should be replaced with configuration/
- * reconfiguration etc.
- */
 void tlsInit(void) {
     ERR_load_crypto_strings();
     SSL_load_error_strings();
@@ -133,30 +132,6 @@ int tlsConfigure(const char *cert_file, const char *key_file,
 error:
     if (ctx) SSL_CTX_free(ctx);
     return C_ERR;
-}
-
-static inline void enterHandler(connection *conn) {
-    conn->flags |= CONN_FLAG_IN_HANDLER;
-}
-
-static inline int exitHandler(connection *conn) {
-    conn->flags &= ~CONN_FLAG_IN_HANDLER;
-    if (conn->flags & CONN_FLAG_CLOSE_SCHEDULED) {
-        connClose(conn);
-        return 0;
-    }
-    return 1;
-}
-
-static inline int callHandler(connection *conn, ConnectionCallbackFunc handler) {
-    conn->flags |= CONN_FLAG_IN_HANDLER;
-    if (handler) handler(conn);
-    conn->flags &= ~CONN_FLAG_IN_HANDLER;
-    if (conn->flags & CONN_FLAG_CLOSE_SCHEDULED) {
-        connClose(conn);
-        return 0;
-    }
-    return 1;
 }
 
 #define TLSCONN_DEBUG(fmt, ...) \
