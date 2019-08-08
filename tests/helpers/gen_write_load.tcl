@@ -1,5 +1,7 @@
 source tests/support/redis.tcl
 
+set ::tlsdir "tests/tls"
+
 proc gen_write_load {host port seconds tls} {
     set start_time [clock seconds]
     set r [redis $host $port 0 $tls]

@@ -494,9 +494,9 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
         package require tls 1.6
         set ::tls 1
         ::tls::init \
-            -cafile "tests/tls/ca.crt" \
-            -certfile "tests/tls/redis.crt" \
-            -keyfile "tests/tls/redis.key"
+            -cafile "$::tlsdir/ca.crt" \
+            -certfile "$::tlsdir/redis.crt" \
+            -keyfile "$::tlsdir/redis.key"
     } elseif {$opt eq {--host}} {
         set ::external 1
         set ::host $arg

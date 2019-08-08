@@ -1,6 +1,8 @@
 source tests/support/redis.tcl
 source tests/support/util.tcl
 
+set ::tlsdir "tests/tls"
+
 # This function sometimes writes sometimes blocking-reads from lists/sorted
 # sets. There are multiple processes like this executing at the same time
 # so that we have some chance to trap some corner condition if there is
