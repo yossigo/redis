@@ -165,11 +165,27 @@ static void connSocketClose(connection *conn) {
 }
 
 static int connSocketWrite(connection *conn, const void *data, size_t data_len) {
-    return write(conn->fd, data, data_len);
+    int ret = write(conn->fd, data, data_len);
+    if (!ret) {
+        conn->state = CONN_STATE_CLOSED;
+    } else if (ret < 0 && errno != EAGAIN) {
+        conn->last_errno = errno;
+        conn->state = CONN_STATE_ERROR;
+    }
+
+    return ret;
 }
 
 static int connSocketRead(connection *conn, void *buf, size_t buf_len) {
-    return read(conn->fd, buf, buf_len);
+    int ret = read(conn->fd, buf, buf_len);
+    if (!ret) {
+        conn->state = CONN_STATE_CLOSED;
+    } else if (ret < 0 && errno != EAGAIN) {
+        conn->last_errno = errno;
+        conn->state = CONN_STATE_ERROR;
+    }
+
+    return ret;
 }
 
 static int connSocketAccept(connection *conn, ConnectionCallbackFunc accept_handler) {

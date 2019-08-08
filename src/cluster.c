@@ -2151,7 +2151,7 @@ void clusterWriteHandler(connection *conn) {
     nwritten = connWrite(conn, link->sndbuf, sdslen(link->sndbuf));
     if (nwritten <= 0) {
         serverLog(LL_DEBUG,"I/O error writing to node link: %s",
-            (nwritten == -1) ? strerror(errno) : "short write");
+            (nwritten == -1) ? connGetLastError(conn) : "short write");
         handleLinkIOError(link);
         return;
     }
@@ -2242,12 +2242,12 @@ void clusterReadHandler(connection *conn) {
         }
 
         nread = connRead(conn,buf,readlen);
-        if (nread == -1 && errno == EAGAIN) return; /* No more data ready. */
+        if (nread == -1 && (connGetState(conn) == CONN_STATE_CONNECTED)) return; /* No more data ready. */
 
         if (nread <= 0) {
             /* I/O error... */
             serverLog(LL_DEBUG,"I/O error reading from node link: %s",
-                (nread == 0) ? "connection closed" : strerror(errno));
+                (nread == 0) ? "connection closed" : connGetLastError(conn));
             handleLinkIOError(link);
             return;
         } else {

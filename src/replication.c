@@ -905,7 +905,7 @@ void sendBulkToSlave(connection *conn) {
         return;
     }
     if ((nwritten = connWrite(conn,buf,buflen)) == -1) {
-        if (errno != EAGAIN) {
+        if (connGetState(conn) != CONN_STATE_CONNECTED) {
             serverLog(LL_WARNING,"Write error sending DB to replica: %s",
                 strerror(errno));
             freeClient(slave);

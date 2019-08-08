@@ -1234,11 +1234,11 @@ int writeToClient(client *c, int handler_installed) {
     }
     server.stat_net_output_bytes += totwritten;
     if (nwritten == -1) {
-        if (errno == EAGAIN) {
+        if (connGetState(c->conn) == CONN_STATE_CONNECTED) {
             nwritten = 0;
         } else {
             serverLog(LL_VERBOSE,
-                "Error writing to client: %s", strerror(errno));
+                "Error writing to client: %s", connGetLastError(c->conn));
             freeClientAsync(c);
             return C_ERR;
         }
@@ -1793,10 +1793,10 @@ void readQueryFromClient(connection *conn) {
     c->querybuf = sdsMakeRoomFor(c->querybuf, readlen);
     nread = connRead(c->conn, c->querybuf+qblen, readlen);
     if (nread == -1) {
-        if (errno == EAGAIN) {
+        if (connGetState(conn) == CONN_STATE_CONNECTED) {
             return;
         } else {
-            serverLog(LL_VERBOSE, "Reading from client: %s",strerror(errno));
+            serverLog(LL_VERBOSE, "Reading from client: %s",connGetLastError(c->conn));
             freeClientAsync(c);
             return;
         }

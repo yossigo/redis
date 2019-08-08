@@ -81,6 +81,7 @@ int tlsConfigure(const char *cert_file, const char *key_file,
     }
 
     ctx = SSL_CTX_new(TLS_method());
+    SSL_CTX_set_mode(ctx, SSL_MODE_ENABLE_PARTIAL_WRITE|SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
     SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER|SSL_VERIFY_FAIL_IF_NO_PEER_CERT, NULL);
     SSL_CTX_set_ecdh_auto(ctx, 1);
 
@@ -137,8 +138,12 @@ error:
     return C_ERR;
 }
 
+#ifdef TLS_DEBUGGING
 #define TLSCONN_DEBUG(fmt, ...) \
     serverLog(LL_DEBUG, "TLSCONN: " fmt, __VA_ARGS__)
+#else
+#define TLSCONN_DEBUG(fmt, ...)
+#endif
 
 ConnectionType CT_TLS;
 
@@ -200,31 +205,39 @@ connection *connCreateAcceptedTLS(int fd, int require_auth) {
 
 static void tlsEventHandler(struct aeEventLoop *el, int fd, void *clientData, int mask);
 
+/* Process the return code received from OpenSSL>
+ * Update the want parameter with expected I/O.
+ * Update the connection's error state if a real error has occured.
+ * Returns an SSL error code, or 0 if no further handling is required.
+ */
 static int handleSSLReturnCode(tls_connection *conn, int ret_value, WantIOType *want) {
     if (ret_value <= 0) {
         int ssl_err = SSL_get_error(conn->ssl, ret_value);
-
         switch (ssl_err) {
             case SSL_ERROR_WANT_WRITE:
                 *want = WANT_WRITE;
-                return C_OK;
+                return 0;
             case SSL_ERROR_WANT_READ:
                 *want = WANT_READ;
-                return C_OK;
+                return 0;
             case SSL_ERROR_SYSCALL:
+                conn->c.last_errno = errno;
                 if (conn->ssl_error) zfree(conn->ssl_error);
-                conn->ssl_error = zstrdup(strerror(errno));
-                return C_ERR;
+                conn->ssl_error = errno ? zstrdup(strerror(errno)) : NULL;
+                break;
             default:
                 /* Error! */
+                conn->c.last_errno = 0;
                 if (conn->ssl_error) zfree(conn->ssl_error);
                 conn->ssl_error = zmalloc(512);
                 ERR_error_string_n(ERR_get_error(), conn->ssl_error, 512);
-                return C_ERR;
+                break;
         }
+
+        return ssl_err;
     }
 
-    return C_OK;
+    return 0;
 }
 
 void registerSSLEvent(tls_connection *conn, WantIOType want) {
@@ -274,6 +287,8 @@ static void tlsEventHandler(struct aeEventLoop *el, int fd, void *clientData, in
             fd, conn->c.state, mask, conn->c.read_handler != NULL, conn->c.write_handler != NULL,
             conn->flags);
 
+    ERR_clear_error();
+
     switch (conn->c.state) {
         case CONN_STATE_CONNECTING:
             if (connGetSocketError((connection *) conn)) {
@@ -287,7 +302,7 @@ static void tlsEventHandler(struct aeEventLoop *el, int fd, void *clientData, in
                 ret = SSL_connect(conn->ssl);
                 if (ret <= 0) {
                     WantIOType want = 0;
-                    if (handleSSLReturnCode(conn, ret, &want) == C_OK) {
+                    if (!handleSSLReturnCode(conn, ret, &want)) {
                         registerSSLEvent(conn, want);
 
                         /* Avoid hitting UpdateSSLEvent, which knows nothing
@@ -311,7 +326,7 @@ static void tlsEventHandler(struct aeEventLoop *el, int fd, void *clientData, in
             ret = SSL_accept(conn->ssl);
             if (ret <= 0) {
                 WantIOType want = 0;
-                if (handleSSLReturnCode(conn, ret, &want) == C_OK) {
+                if (!handleSSLReturnCode(conn, ret, &want)) {
                     /* Avoid hitting UpdateSSLEvent, which knows nothing
                      * of what SSL_connect() wants and instead looks at our
                      * R/W handlers.
@@ -376,6 +391,7 @@ static int connTLSAccept(connection *_conn, ConnectionCallbackFunc accept_handle
     int ret;
 
     if (conn->c.state != CONN_STATE_ACCEPTING) return C_ERR;
+    ERR_clear_error();
 
     /* Try to accept */
     conn->c.conn_handler = accept_handler;
@@ -383,7 +399,7 @@ static int connTLSAccept(connection *_conn, ConnectionCallbackFunc accept_handle
 
     if (ret <= 0) {
         WantIOType want = 0;
-        if (handleSSLReturnCode(conn, ret, &want) == C_OK) {
+        if (!handleSSLReturnCode(conn, ret, &want)) {
             registerSSLEvent(conn, want);   /* We'll fire back */
             return C_OK;
         } else {
@@ -403,6 +419,7 @@ static int connTLSConnect(connection *conn_, const char *addr, int port, const c
     tls_connection *conn = (tls_connection *) conn_;
 
     if (conn->c.state != CONN_STATE_NONE) return C_ERR;
+    ERR_clear_error();
 
     /* Initiate Socket connection first */
     if (CT_Socket.connect(conn_, addr, port, src_addr, connect_handler) == C_ERR) return C_ERR;
@@ -415,21 +432,28 @@ static int connTLSConnect(connection *conn_, const char *addr, int port, const c
 
 static int connTLSWrite(connection *conn_, const void *data, size_t data_len) {
     tls_connection *conn = (tls_connection *) conn_;
-    int ret;
+    int ret, ssl_err;
 
     if (conn->c.state != CONN_STATE_CONNECTED) return -1;
+    ERR_clear_error();
     ret = SSL_write(conn->ssl, data, data_len);
 
     if (ret <= 0) {
         WantIOType want = 0;
-        if (handleSSLReturnCode(conn, ret, &want) == C_OK) {
+        if (!(ssl_err = handleSSLReturnCode(conn, ret, &want))) {
             if (want == WANT_READ) conn->flags |= TLS_CONN_FLAG_WRITE_WANT_READ;
             updateSSLEvent(conn);
             errno = EAGAIN;
             return -1;
         } else {
-            conn->c.state = CONN_STATE_ERROR;
-            return -1;
+            if (ssl_err == SSL_ERROR_ZERO_RETURN ||
+                    ((ssl_err == SSL_ERROR_SYSCALL && !errno))) {
+                conn->c.state = CONN_STATE_CLOSED;
+                return 0;
+            } else {
+                conn->c.state = CONN_STATE_ERROR;
+                return -1;
+            }
         }
     }
 
@@ -439,20 +463,28 @@ static int connTLSWrite(connection *conn_, const void *data, size_t data_len) {
 static int connTLSRead(connection *conn_, void *buf, size_t buf_len) {
     tls_connection *conn = (tls_connection *) conn_;
     int ret;
+    int ssl_err;
 
     if (conn->c.state != CONN_STATE_CONNECTED) return -1;
+    ERR_clear_error();
     ret = SSL_read(conn->ssl, buf, buf_len);
     if (ret <= 0) {
         WantIOType want = 0;
-        if (handleSSLReturnCode(conn, ret, &want) == C_OK) {
+        if (!(ssl_err = handleSSLReturnCode(conn, ret, &want))) {
             if (want == WANT_WRITE) conn->flags |= TLS_CONN_FLAG_READ_WANT_WRITE;
             updateSSLEvent(conn);
 
             errno = EAGAIN;
             return -1;
         } else {
-            conn->c.state = CONN_STATE_ERROR;
-            return -1;
+            if (ssl_err == SSL_ERROR_ZERO_RETURN ||
+                    ((ssl_err == SSL_ERROR_SYSCALL) && !errno)) {
+                conn->c.state = CONN_STATE_CLOSED;
+                return 0;
+            } else {
+                conn->c.state = CONN_STATE_ERROR;
+                return -1;
+            }
         }
     }
 
@@ -518,7 +550,9 @@ static ssize_t connTLSSyncWrite(connection *conn_, char *ptr, ssize_t size, long
     tls_connection *conn = (tls_connection *) conn_;
 
     setBlockingTimeout(conn, timeout);
+    SSL_clear_mode(conn->ssl, SSL_MODE_ENABLE_PARTIAL_WRITE);
     int ret = SSL_write(conn->ssl, ptr, size);
+    SSL_set_mode(conn->ssl, SSL_MODE_ENABLE_PARTIAL_WRITE);
     unsetBlockingTimeout(conn);
 
     return ret;

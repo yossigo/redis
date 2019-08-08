@@ -41,6 +41,7 @@ typedef enum {
     CONN_STATE_CONNECTING,
     CONN_STATE_ACCEPTING,
     CONN_STATE_CONNECTED,
+    CONN_STATE_CLOSED,
     CONN_STATE_ERROR
 } ConnectionState;
 
@@ -118,12 +119,23 @@ static inline int connBlockingConnect(connection *conn, const char *addr, int po
 }
 
 /* Write to connection, behaves the same as write(2).
+ *
+ * Like write(2), a short write is possible. A -1 return indicates an error.
+ *
+ * The caller should NOT rely on errno. Testing for an EAGAIN-like condition, use
+ * connGetState() to see if the connection state is still CONN_STATE_CONNECTED.
  */
 static inline int connWrite(connection *conn, const void *data, size_t data_len) {
     return conn->type->write(conn, data, data_len);
 }
 
 /* Read from the connection, behaves the same as read(2).
+ * 
+ * Like read(2), a short read is possible.  A return value of 0 will indicate the
+ * connection was closed, and -1 will indicate an error.
+ *
+ * The caller should NOT rely on errno. Testing for an EAGAIN-like condition, use
+ * connGetState() to see if the connection state is still CONN_STATE_CONNECTED.
  */
 static inline int connRead(connection *conn, void *buf, size_t buf_len) {
     return conn->type->read(conn, buf, buf_len);
@@ -151,6 +163,9 @@ static inline int connShutdown(connection *conn, int how) {
     return conn->type->shutdown(conn, how);
 }
 
+/* Returns the last error encountered by the connection, as a string.  If no error,
+ * a NULL is returned.
+ */
 static inline const char *connGetLastError(connection *conn) {
     return conn->type->get_last_error(conn);
 }
