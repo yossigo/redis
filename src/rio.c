@@ -288,50 +288,46 @@ static size_t rioFdWrite(rio *r, const void *buf, size_t len) {
     unsigned char *p = (unsigned char*) buf;
     int doflush = (buf == NULL && len == 0);
 
-    /* To start we always append to our buffer. If it gets larger than
-     * a given size, we actually write to the sockets. */
-    if (len) {
-        r->io.fd.buf = sdscatlen(r->io.fd.buf,buf,len);
-        len = 0; /* Prevent entering the while below if we don't flush. */
-        if (sdslen(r->io.fd.buf) > PROTO_IOBUF_LEN) doflush = 1;
-    }
-
-    if (doflush) {
+    /* For small writes, we rather keep the data in user-space buffer, and flush
+     * it only when it grows. however for larger writes, we prefer to flush
+     * any pre-existing buffer, and write the new one directly without reallocs
+     * and memory copying. */
+    if (len > PROTO_IOBUF_LEN) {
+        /* First, flush any pre-existing buffered data. */
+        if (sdslen(r->io.fd.buf)) {
+            if (rioFdWrite(r, NULL, 0) == 0)
+                return 0;
+        }
+        /* Write the new data, keeping 'p' and 'len' from the input. */
+    } else {
+        if (len) {
+            r->io.fd.buf = sdscatlen(r->io.fd.buf,buf,len);
+            if (sdslen(r->io.fd.buf) > PROTO_IOBUF_LEN)
+                doflush = 1;
+            if (!doflush)
+                return 1;
+        }
+        /* Flusing the buffered data. set 'p' and 'len' accordintly. */
         p = (unsigned char*) r->io.fd.buf;
         len = sdslen(r->io.fd.buf);
     }
 
-    /* Write in little chunchs so that when there are big writes we
-     * parallelize while the kernel is sending data in background to
-     * the TCP socket. */
-    while(len) {
-        size_t count = len < 1024 ? len : 1024;
-
-        /* Make sure to write 'count' bytes to the socket regardless
-         * of short writes. */
-        size_t nwritten = 0;
-        while(nwritten != count) {
-            retval = write(r->io.fd.fd,p+nwritten,count-nwritten);
-            if (retval <= 0) {
-                /* With blocking sockets, which is the sole user of this
-                 * rio target, EWOULDBLOCK is returned only because of
-                 * the SO_SNDTIMEO socket option, so we translate the error
-                 * into one more recognizable by the user. */
-                if (retval == -1 && errno == EWOULDBLOCK) errno = ETIMEDOUT;
-                break;
-            }
-            nwritten += retval;
-        }
-
-        if (nwritten != count) {
+    size_t nwritten = 0;
+    while(nwritten != len) {
+        retval = write(r->io.fd.fd,p+nwritten,len-nwritten);
+        if (retval <= 0) {
+            /* With blocking io, which is the sole user of this
+             * rio target, EWOULDBLOCK is returned only because of
+             * the SO_SNDTIMEO socket option, so we translate the error
+             * into one more recognizable by the user. */
+            if (retval == -1 && errno == EWOULDBLOCK) errno = ETIMEDOUT;
             return 0; /* error. */
         }
-        p += count;
-        len -= count;
-        r->io.fd.pos += count;
+        nwritten += retval;
     }
 
-    if (doflush) sdsclear(r->io.fd.buf);
+    r->io.fd.pos += len;
+    sdsclear(r->io.fd.buf);
     return 1;
 }
 
