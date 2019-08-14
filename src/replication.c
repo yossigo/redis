@@ -1040,7 +1040,7 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
                     server.rdb_pipe_conns[i] = NULL;
                     continue;
                 }
-                /* An error and still in connected state, is equivaltnt to EAGAIN */
+                /* An error and still in connected state, is equivalent to EAGAIN */
                 slave->repldboff = 0;
             } else {
                 slave->repldboff = nwritten;
