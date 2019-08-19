@@ -881,7 +881,7 @@ static void acceptCommonHandler(connection *conn, int flags, char *ip) {
         serverLog(LL_WARNING,
                 "Error accepting a client connection: %s (conn: %s)",
                 connGetLastError(conn), connGetInfo(conn, conninfo, sizeof(conninfo)));
-        connClose(conn);
+        freeClient(connGetPrivateData(conn));
         return;
     }
 }
