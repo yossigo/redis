@@ -1020,6 +1020,21 @@ struct malloc_stats {
 };
 
 /*-----------------------------------------------------------------------------
+ * TLS Context Configuration
+ *----------------------------------------------------------------------------*/
+
+typedef struct redisTLSContextConfig {
+    char *cert_file;
+    char *key_file;
+    char *dh_params_file;
+    char *ca_cert_file;
+    int protocols;
+    char *ciphers;
+    char *ciphersuites;
+    int prefer_server_ciphers;
+} redisTLSContextConfig;
+
+/*-----------------------------------------------------------------------------
  * Global server state
  *----------------------------------------------------------------------------*/
 
@@ -1417,11 +1432,8 @@ struct redisServer {
     /* TLS Configuration */
     int tls_cluster;
     int tls_replication;
-    char *tls_cert_file;
-    char *tls_key_file;
-    char *tls_dh_params_file;
-    char *tls_ca_cert_file;
     int tls_auth_clients;
+    redisTLSContextConfig tls_ctx_config;
 };
 
 typedef struct pubsubPattern {
@@ -2360,9 +2372,9 @@ int populateCommandTableParseFlags(struct redisCommand *c, char *strflags);
 
 /* TLS stuff */
 void tlsInit(void);
-int tlsConfigureServer(void);
-int tlsConfigure(const char *cert_file, const char *key_file,
-        const char *dh_params_file, const char *ca_cert_file);
+int tlsConfigure(redisTLSContextConfig *ctx_config);
+int tlsParseProtocolsConfig(const char *str, const char **err);
+sds tlsProtocolsToString(int protocols);
 
 #define redisDebug(fmt, ...) \
     printf("DEBUG %s:%d > " fmt "\n", __FILE__, __LINE__, __VA_ARGS__)
