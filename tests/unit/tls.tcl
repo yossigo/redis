@@ -55,7 +55,7 @@ start_server {tags {"tls"}} {
             catch {$s PING} e
             assert_match {PONG} $e
 
-            r CONFIG SET tls-protocols default
+            r CONFIG SET tls-protocols ""
         }
 
         test {TLS: Verify tls-ciphers behaves as expected} {
@@ -76,7 +76,7 @@ start_server {tags {"tls"}} {
             catch {$s PING} e
             assert_match {PONG} $e
 
-            r CONFIG SET tls-protocols default
+            r CONFIG SET tls-protocols ""
             r CONFIG SET tls-ciphers "DEFAULT"
         }
 
@@ -98,7 +98,7 @@ start_server {tags {"tls"}} {
 
             assert_equal "AES128-SHA256" [dict get [::tls::status [$s channel]] cipher]
 
-            r CONFIG SET tls-protocols default
+            r CONFIG SET tls-protocols ""
             r CONFIG SET tls-ciphers "DEFAULT"
         }
     }
