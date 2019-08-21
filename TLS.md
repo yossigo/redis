@@ -81,10 +81,7 @@ TLS Features
 ------------
 
 1. Add metrics to INFO.
-2. Add certificate authentication configuration (i.e. option to skip client
-auth, master auth, etc.).
-3. Add TLS cipher configuration options.
-4. [Optional] Add session caching support. Check if/how it's handled by clients
+2. [Optional] Add session caching support. Check if/how it's handled by clients
    to assess how useful/important it is.
 
 
