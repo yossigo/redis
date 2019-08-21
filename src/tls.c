@@ -218,10 +218,12 @@ int tlsConfigure(redisTLSContextConfig *ctx_config) {
         goto error;
     }
 
+#ifdef TLS1_3_VERSION
     if (ctx_config->ciphersuites && !SSL_CTX_set_ciphersuites(ctx, ctx_config->ciphersuites)) {
         serverLog(LL_WARNING, "Failed to configure ciphersuites: %s", ctx_config->ciphersuites);
         goto error;
     }
+#endif
 
     SSL_CTX_free(tls_ctx);
     tls_ctx = ctx;
@@ -478,7 +480,7 @@ static void tlsHandleEvent(tls_connection *conn, int mask) {
              * risk of not calling the read handler again, make sure to add it
              * to a list of pending connection that should be handled anyway. */
             if ((mask & AE_READABLE)) {
-                if (SSL_has_pending(conn->ssl)) {
+                if (SSL_pending(conn->ssl) > 0) {
                     if (!conn->pending_list_node) {
                         listAddNodeTail(pending_list, conn);
                         conn->pending_list_node = listLast(pending_list);
