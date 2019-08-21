@@ -1028,7 +1028,7 @@ typedef struct redisTLSContextConfig {
     char *key_file;
     char *dh_params_file;
     char *ca_cert_file;
-    int protocols;
+    char *protocols;
     char *ciphers;
     char *ciphersuites;
     int prefer_server_ciphers;
@@ -2373,8 +2373,6 @@ int populateCommandTableParseFlags(struct redisCommand *c, char *strflags);
 /* TLS stuff */
 void tlsInit(void);
 int tlsConfigure(redisTLSContextConfig *ctx_config);
-int tlsParseProtocolsConfig(const char *str, const char **err);
-sds tlsProtocolsToString(int protocols);
 
 #define redisDebug(fmt, ...) \
     printf("DEBUG %s:%d > " fmt "\n", __FILE__, __LINE__, __VA_ARGS__)

@@ -822,13 +822,8 @@ void loadServerConfigFromString(char *config) {
             zfree(server.tls_ctx_config.ca_cert_file);
             server.tls_ctx_config.ca_cert_file = zstrdup(argv[1]);
         } else if (!strcasecmp(argv[0],"tls-protocols") && argc >= 2) {
-            server.tls_ctx_config.protocols = 0;
-            int j;
-            for (j = 1; j < argc; j++) {
-                int p = tlsParseProtocolsConfig(argv[j], &err);
-                if (p < 0) goto loaderr;
-                else server.tls_ctx_config.protocols |= p;
-            }
+            zfree(server.tls_ctx_config.protocols);
+            server.tls_ctx_config.protocols = zstrdup(argv[1]);
         } else if (!strcasecmp(argv[0],"tls-ciphers") && argc == 2) {
             zfree(server.tls_ctx_config.ciphers);
             server.tls_ctx_config.ciphers = zstrdup(argv[1]);
@@ -1325,21 +1320,18 @@ void configSetCommand(client *c) {
         zfree(server.tls_ctx_config.ca_cert_file);
         server.tls_ctx_config.ca_cert_file = zstrdup(o->ptr);
     } config_set_bool_field("tls-auth-clients", server.tls_auth_clients) {
+    } config_set_bool_field("tls-replication", server.tls_replication) {
+    } config_set_bool_field("tls-cluster", server.tls_cluster) {
     } config_set_special_field("tls-protocols") {
-        const char *err;
         redisTLSContextConfig tmpctx = server.tls_ctx_config;
-        tmpctx.protocols = tlsParseProtocolsConfig((char *) o->ptr, &err);
-        if (tmpctx.protocols < 0) {
-            addReplyError(c, err);
-            return;
-        }
-
+        tmpctx.protocols = (char *) o->ptr;
         if (tlsConfigure(&tmpctx) == C_ERR) {
             addReplyError(c,
-                    "Unable to reconfigure TLS. Check server logs.");
+                    "Unable to configure tls-protocols. Check server logs.");
             return;
         }
-        server.tls_ctx_config.protocols = tmpctx.protocols;
+        zfree(server.tls_ctx_config.protocols);
+        server.tls_ctx_config.protocols = zstrdup(o->ptr);
     } config_set_special_field("tls-ciphers") {
         redisTLSContextConfig tmpctx = server.tls_ctx_config;
         tmpctx.ciphers = (char *) o->ptr;
@@ -1446,6 +1438,7 @@ void configGetCommand(client *c) {
     config_get_string_field("tls-key-file",server.tls_ctx_config.key_file);
     config_get_string_field("tls-dh-params-file",server.tls_ctx_config.dh_params_file);
     config_get_string_field("tls-ca-cert-file",server.tls_ctx_config.ca_cert_file);
+    config_get_string_field("tls-protocols",server.tls_ctx_config.protocols);
     config_get_string_field("tls-ciphers",server.tls_ctx_config.ciphers);
     config_get_string_field("tls-ciphersuites",server.tls_ctx_config.ciphersuites);
 
@@ -1653,14 +1646,6 @@ void configGetCommand(client *c) {
         } else {
             addReplyBulkCString(c,"");
         }
-        matches++;
-    }
-    if (stringmatch(pattern,"tls-protocols",1)) {
-        sds protocols = tlsProtocolsToString(server.tls_ctx_config.protocols);
-
-        addReplyBulkCString(c,"tls-protocols");
-        addReplyBulkCString(c,protocols);
-        sdsfree(protocols);
         matches++;
     }
 
@@ -2256,7 +2241,6 @@ cleanup:
 int rewriteConfig(char *path) {
     struct rewriteConfigState *state;
     sds newcontent;
-    sds temp;
     int retval;
 
     /* Step 1: read the old config into our rewrite state. */
@@ -2361,11 +2345,9 @@ int rewriteConfig(char *path) {
     rewriteConfigStringOption(state,"tls-key-file",server.tls_ctx_config.key_file,NULL);
     rewriteConfigStringOption(state,"tls-dh-params-file",server.tls_ctx_config.dh_params_file,NULL);
     rewriteConfigStringOption(state,"tls-ca-cert-file",server.tls_ctx_config.ca_cert_file,NULL);
+    rewriteConfigStringOption(state,"tls-protocols",server.tls_ctx_config.protocols,NULL);
     rewriteConfigStringOption(state,"tls-ciphers",server.tls_ctx_config.ciphers,NULL);
     rewriteConfigStringOption(state,"tls-ciphersuites",server.tls_ctx_config.ciphersuites,NULL);
-    temp = tlsProtocolsToString(server.tls_ctx_config.protocols);
-    rewriteConfigStringOption(state,"tls-protocols",temp,NULL);
-    sdsfree(temp);
     rewriteConfigYesNoOption(state,"tls-prefer-server-ciphers",server.tls_ctx_config.prefer_server_ciphers,0);
 
     /* Rewrite Sentinel config if in Sentinel mode. */

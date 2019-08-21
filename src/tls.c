@@ -54,13 +54,15 @@ extern ConnectionType CT_Socket;
 
 static SSL_CTX *tls_ctx;
 
-int tlsParseProtocolsConfig(const char *str, const char **err) {
+static int parseProtocolsConfig(const char *str) {
     int i, count = 0;
-    sds *tokens = sdssplitlen(str, strlen(str), " ", 1, &count);
     int protocols = 0;
 
+    if (!str) return REDIS_TLS_PROTO_DEFAULT;
+    sds *tokens = sdssplitlen(str, strlen(str), " ", 1, &count);
+
     if (!tokens) { 
-        *err = "Invalid value";
+        serverLog(LL_WARNING, "Invalid tls-protocols configuration string");
         return -1;
     }
     for (i = 0; i < count; i++) {
@@ -71,13 +73,13 @@ int tlsParseProtocolsConfig(const char *str, const char **err) {
 #ifdef TLS1_3_VERSION
             protocols |= REDIS_TLS_PROTO_TLSv1_3;
 #else
-            *err = "TLSv1.3 is not supported by this OpenSSL library.";
+            serverLog(LL_WARNING, "TLSv1.3 is specified in tls-protocols but not supported by OpenSSL.");
             protocols = -1;
             break;
 #endif
-        } else if (!strcasecmp(tokens[i], "default")) protocols = REDIS_TLS_PROTO_DEFAULT;
-        else {
-            *err = "Invalid value used. Use 'TLSv1', 'TLSv1.1' through 'TLSv1.3' or 'default'.";
+        } else {
+            serverLog(LL_WARNING, "Invalid tls-protocols specified. "
+                    "Use a combination of 'TLSv1', 'TLSv1.1', 'TLSv1.2' and 'TLSv1.3'.");
             protocols = -1;
             break;
         }
@@ -85,21 +87,6 @@ int tlsParseProtocolsConfig(const char *str, const char **err) {
     sdsfreesplitres(tokens, count);
 
     return protocols;
-}
-
-sds tlsProtocolsToString(int protocols) {
-    sds ret = sdsempty();
-
-    if (protocols == REDIS_TLS_PROTO_DEFAULT) {
-        sdscat(ret, "default");
-        return ret;
-    }
-
-    if (protocols & REDIS_TLS_PROTO_TLSv1) ret = sdscat(ret, "TLSv1 ");
-    if (protocols & REDIS_TLS_PROTO_TLSv1_1) ret = sdscat(ret, "TLSv1.1 ");
-    if (protocols & REDIS_TLS_PROTO_TLSv1_2) ret = sdscat(ret, "TLSv1.2 ");
-    if (protocols & REDIS_TLS_PROTO_TLSv1_3) ret = sdscat(ret, "TLSv1.3 ");
-    return sdstrim(ret, " ");
 }
 
 /* list of connections with pending data already read from the socket, but not
@@ -119,7 +106,6 @@ void tlsInit(void) {
 
     /* Server configuration */
     server.tls_auth_clients = 1;    /* Secure by default */
-    server.tls_ctx_config.protocols = REDIS_TLS_PROTO_DEFAULT;
 }
 
 /* Attempt to configure/reconfigure TLS. This operation is atomic and will
@@ -153,16 +139,19 @@ int tlsConfigure(redisTLSContextConfig *ctx_config) {
     SSL_CTX_set_options(ctx, SSL_OP_DONT_INSERT_EMPTY_FRAGMENTS);
 #endif
 
-    if (!(ctx_config->protocols & REDIS_TLS_PROTO_TLSv1))
+    int protocols = parseProtocolsConfig(ctx_config->protocols);
+    if (protocols == -1) goto error;
+
+    if (!(protocols & REDIS_TLS_PROTO_TLSv1))
         SSL_CTX_set_options(ctx, SSL_OP_NO_TLSv1);
-    if (!(ctx_config->protocols & REDIS_TLS_PROTO_TLSv1_1))
+    if (!(protocols & REDIS_TLS_PROTO_TLSv1_1))
         SSL_CTX_set_options(ctx, SSL_OP_NO_TLSv1_1);
 #ifdef SSL_OP_NO_TLSv1_2
-    if (!(ctx_config->protocols & REDIS_TLS_PROTO_TLSv1_2))
+    if (!(protocols & REDIS_TLS_PROTO_TLSv1_2))
         SSL_CTX_set_options(ctx, SSL_OP_NO_TLSv1_2);
 #endif
 #ifdef SSL_OP_NO_TLSv1_3
-    if (!(ctx_config->protocols & REDIS_TLS_PROTO_TLSv1_3))
+    if (!(protocols & REDIS_TLS_PROTO_TLSv1_3))
         SSL_CTX_set_options(ctx, SSL_OP_NO_TLSv1_3);
 #endif
 
