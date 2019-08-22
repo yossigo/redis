@@ -93,6 +93,8 @@ else
 ifeq ($(uname_S),Darwin)
 	# Darwin
 	FINAL_LIBS+= -ldl
+	OPENSSL_CFLAGS=-I/usr/local/opt/openssl/include
+	OPENSSL_LDFLAGS=-L/usr/local/opt/openssl/lib
 else
 ifeq ($(uname_S),AIX)
         # AIX
@@ -146,7 +148,8 @@ ifeq ($(MALLOC),jemalloc)
 endif
 
 ifeq ($(BUILD_TLS),yes)
-    FINAL_CFLAGS += -DUSE_OPENSSL
+    FINAL_CFLAGS+=-DUSE_OPENSSL $(OPENSSL_CFLAGS)
+    FINAL_LDFLAGS+=$(OPENSSL_LDFLAGS)
     FINAL_LIBS += -lssl -lcrypto
 endif
 
