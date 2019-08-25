@@ -2010,6 +2010,11 @@ void sentinelReconnectInstance(sentinelRedisInstance *ri) {
     /* Commands connection. */
     if (link->cc == NULL) {
         link->cc = redisAsyncConnectBind(ri->addr->ip,ri->addr->port,NET_FIRST_BIND_ADDR);
+        if (!link->cc->err && server.tls_replication) {
+            redisSecureConnection(&link->cc->c, server.tls_ctx_config.ca_cert_file,
+                        server.tls_ctx_config.cert_file, server.tls_ctx_config.key_file,
+                        NULL);
+        }
         if (link->cc->err) {
             sentinelEvent(LL_DEBUG,"-cmd-link-reconnection",ri,"%@ #%s",
                 link->cc->errstr);
@@ -2033,6 +2038,11 @@ void sentinelReconnectInstance(sentinelRedisInstance *ri) {
     /* Pub / Sub */
     if ((ri->flags & (SRI_MASTER|SRI_SLAVE)) && link->pc == NULL) {
         link->pc = redisAsyncConnectBind(ri->addr->ip,ri->addr->port,NET_FIRST_BIND_ADDR);
+        if (!link->pc->err && server.tls_replication) {
+            redisSecureConnection(&link->pc->c, server.tls_ctx_config.ca_cert_file,
+                        server.tls_ctx_config.cert_file, server.tls_ctx_config.key_file,
+                        NULL);
+        }
         if (link->pc->err) {
             sentinelEvent(LL_DEBUG,"-pubsub-link-reconnection",ri,"%@ #%s",
                 link->pc->errstr);
@@ -2584,8 +2594,9 @@ int sentinelSendHello(sentinelRedisInstance *ri) {
             return C_ERR;
         announce_ip = ip;
     }
-    announce_port = sentinel.announce_port ?
-                    sentinel.announce_port : server.port;
+    if (sentinel.announce_port) announce_port = sentinel.announce_port;
+    else if (server.tls_replication && server.tls_port) announce_port = server.tls_port;
+    else announce_port = server.port;
 
     /* Format and send the Hello message. */
     snprintf(payload,sizeof(payload),
