@@ -3925,7 +3925,7 @@ sds genRedisInfoString(char *section) {
 #endif
             (long) getpid(),
             server.runid,
-            server.port,
+            server.port ? server.port : server.tls_port,
             (intmax_t)uptime,
             (intmax_t)(uptime/(3600*24)),
             server.hz,
@@ -4536,7 +4536,7 @@ void redisAsciiArt(void) {
     if (!show_logo) {
         serverLog(LL_NOTICE,
             "Running mode=%s, port=%d.",
-            mode, server.port
+            mode, server.port ? server.port : server.tls_port
         );
     } else {
         snprintf(buf,1024*16,ascii_logo,
