@@ -1434,6 +1434,7 @@ void configGetCommand(client *c) {
     config_get_string_field("pidfile",server.pidfile);
     config_get_string_field("slave-announce-ip",server.slave_announce_ip);
     config_get_string_field("replica-announce-ip",server.slave_announce_ip);
+#ifdef USE_OPENSSL
     config_get_string_field("tls-cert-file",server.tls_ctx_config.cert_file);
     config_get_string_field("tls-key-file",server.tls_ctx_config.key_file);
     config_get_string_field("tls-dh-params-file",server.tls_ctx_config.dh_params_file);
@@ -1441,6 +1442,7 @@ void configGetCommand(client *c) {
     config_get_string_field("tls-protocols",server.tls_ctx_config.protocols);
     config_get_string_field("tls-ciphers",server.tls_ctx_config.ciphers);
     config_get_string_field("tls-ciphersuites",server.tls_ctx_config.ciphersuites);
+#endif
 
     /* Numerical values */
     config_get_numerical_field("maxmemory",server.maxmemory);
@@ -1534,7 +1536,6 @@ void configGetCommand(client *c) {
     config_get_bool_field("tls-auth-clients",server.tls_auth_clients);
     config_get_bool_field("tls-prefer-server-ciphers",
             server.tls_ctx_config.prefer_server_ciphers);
-
     /* Enum values */
     config_get_enum_field("maxmemory-policy",
             server.maxmemory_policy,maxmemory_policy_enum);
@@ -2259,9 +2260,6 @@ int rewriteConfig(char *path) {
     rewriteConfigNumericalOption(state,"cluster-announce-port",server.cluster_announce_port,CONFIG_DEFAULT_CLUSTER_ANNOUNCE_PORT);
     rewriteConfigNumericalOption(state,"cluster-announce-bus-port",server.cluster_announce_bus_port,CONFIG_DEFAULT_CLUSTER_ANNOUNCE_BUS_PORT);
     rewriteConfigNumericalOption(state,"tcp-backlog",server.tcp_backlog,CONFIG_DEFAULT_TCP_BACKLOG);
-    rewriteConfigYesNoOption(state,"tls-cluster",server.tls_cluster,0);
-    rewriteConfigYesNoOption(state,"tls-replication",server.tls_replication,0);
-    rewriteConfigYesNoOption(state,"tls-auth-clients",server.tls_auth_clients,1);
     rewriteConfigBindOption(state);
     rewriteConfigStringOption(state,"unixsocket",server.unixsocket,NULL);
     rewriteConfigOctalOption(state,"unixsocketperm",server.unixsocketperm,CONFIG_DEFAULT_UNIX_SOCKET_PERM);
@@ -2341,6 +2339,10 @@ int rewriteConfig(char *path) {
     rewriteConfigEnumOption(state,"supervised",server.supervised_mode,supervised_mode_enum,SUPERVISED_NONE);
     rewriteConfigNumericalOption(state,"rdb-key-save-delay",server.rdb_key_save_delay,CONFIG_DEFAULT_RDB_KEY_SAVE_DELAY);
     rewriteConfigNumericalOption(state,"key-load-delay",server.key_load_delay,CONFIG_DEFAULT_KEY_LOAD_DELAY);
+#ifdef USE_OPENSSL
+    rewriteConfigYesNoOption(state,"tls-cluster",server.tls_cluster,0);
+    rewriteConfigYesNoOption(state,"tls-replication",server.tls_replication,0);
+    rewriteConfigYesNoOption(state,"tls-auth-clients",server.tls_auth_clients,1);
     rewriteConfigStringOption(state,"tls-cert-file",server.tls_ctx_config.cert_file,NULL);
     rewriteConfigStringOption(state,"tls-key-file",server.tls_ctx_config.key_file,NULL);
     rewriteConfigStringOption(state,"tls-dh-params-file",server.tls_ctx_config.dh_params_file,NULL);
@@ -2349,6 +2351,7 @@ int rewriteConfig(char *path) {
     rewriteConfigStringOption(state,"tls-ciphers",server.tls_ctx_config.ciphers,NULL);
     rewriteConfigStringOption(state,"tls-ciphersuites",server.tls_ctx_config.ciphersuites,NULL);
     rewriteConfigYesNoOption(state,"tls-prefer-server-ciphers",server.tls_ctx_config.prefer_server_ciphers,0);
+#endif
 
     /* Rewrite Sentinel config if in Sentinel mode. */
     if (server.sentinel_mode) rewriteConfigSentinelOption(state);
