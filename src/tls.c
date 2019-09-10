@@ -782,16 +782,8 @@ void tlsProcessPendingData() {
 void tlsInit(void) {
 }
 
-int tlsConfigure(const char *cert_file, const char *key_file,
-        const char *dh_params_file, const char *ca_cert_file) {
-    UNUSED(cert_file);
-    UNUSED(key_file);
-    UNUSED(dh_params_file);
-    UNUSED(ca_cert_file);
-    return C_OK;
-}
-
-int tlsConfigureServer(void) {
+int tlsConfigure(redisTLSContextConfig *ctx_config) {
+    UNUSED(ctx_config);
     return C_OK;
 }
 
